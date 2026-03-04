@@ -1,0 +1,5 @@
+{
+  "version": "3.4.0",
+  "minimumRequired": "3.0.0",
+  "changelog": "Fix: detection SQL silencieuse pour commandes. Colonnes optionnelles (note, total_wrapping). Diagnostic erreurs SQL dans le flux NDJSON. Fix: clamping int32 overflow."
+}

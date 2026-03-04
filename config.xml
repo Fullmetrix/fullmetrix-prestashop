@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module>
+    <name>fullmetrixconnector</name>
+    <displayName><![CDATA[Fullmetrix]]></displayName>
+    <version><![CDATA[3.4.0]]></version>
+    <description><![CDATA[Connectez votre boutique PrestaShop a Fullmetrix pour synchroniser vos commandes.]]></description>
+    <author><![CDATA[Fullmetrix]]></author>
+    <tab><![CDATA[analytics_stats]]></tab>
+    <is_configurable>1</is_configurable>
+    <need_instance>0</need_instance>
+    <limited_countries></limited_countries>
+</module>
