@@ -443,9 +443,27 @@ class FullmetrixStreamExporter
         return $map;
     }
 
+    private function detectOrderCartRuleColumns()
+    {
+        $hasValueTaxIncl = false;
+        try {
+            $result = $this->db->executeS(
+                'SHOW COLUMNS FROM ' . $this->prefix . "order_cart_rule WHERE Field = 'value_tax_incl'"
+            );
+            if (is_array($result) && count($result) > 0) {
+                $hasValueTaxIncl = true;
+            }
+        } catch (\Throwable $e) {
+        }
+        return $hasValueTaxIncl;
+    }
+
     private function batchLoadOrderCartRules($orderIdsList)
     {
-        $sql = 'SELECT ocr.id_order, ocr.id_cart_rule, ocr.name, ocr.value, ocr.value_tax_incl
+        $hasValueTaxIncl = $this->detectOrderCartRuleColumns();
+        $valueSel = $hasValueTaxIncl ? 'ocr.value_tax_incl' : 'ocr.value';
+
+        $sql = 'SELECT ocr.id_order, ocr.id_cart_rule, ocr.name, ' . $valueSel . ' AS discount_value
             FROM ' . $this->prefix . 'order_cart_rule ocr
             WHERE ocr.id_order IN (' . $orderIdsList . ')';
 
@@ -458,7 +476,7 @@ class FullmetrixStreamExporter
                 $map[$oid][] = [
                     'id' => (int) $row['id_cart_rule'],
                     'code' => (string) ($row['name'] ?? ''),
-                    'discount' => (string) round((float) $row['value_tax_incl'], 2),
+                    'discount' => (string) round((float) $row['discount_value'], 2),
                 ];
             }
         }
@@ -1419,7 +1437,15 @@ class FullmetrixStreamExporter
 
     private function safeQuery($sql, $context = '')
     {
-        $rows = $this->db->executeS($sql);
+        try {
+            $rows = $this->db->executeS($sql);
+        } catch (\Throwable $e) {
+            $this->sendLine([
+                'type' => 'error',
+                'message' => 'SQL exception' . ($context ? " [$context]" : '') . ': ' . $e->getMessage(),
+            ]);
+            return false;
+        }
         if ($rows === false) {
             $error = method_exists($this->db, 'getMsgError') ? $this->db->getMsgError() : 'Unknown SQL error';
             $this->sendLine([
