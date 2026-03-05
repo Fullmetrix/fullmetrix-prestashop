@@ -463,8 +463,9 @@ class FullmetrixStreamExporter
         $hasValueTaxIncl = $this->detectOrderCartRuleColumns();
         $valueSel = $hasValueTaxIncl ? 'ocr.value_tax_incl' : 'ocr.value';
 
-        $sql = 'SELECT ocr.id_order, ocr.id_cart_rule, ocr.name, ' . $valueSel . ' AS discount_value
+        $sql = 'SELECT ocr.id_order, ocr.id_cart_rule, ocr.name, cr.code AS coupon_code, ' . $valueSel . ' AS discount_value
             FROM ' . $this->prefix . 'order_cart_rule ocr
+            LEFT JOIN ' . $this->prefix . 'cart_rule cr ON (ocr.id_cart_rule = cr.id_cart_rule)
             WHERE ocr.id_order IN (' . $orderIdsList . ')';
 
         $rows = $this->safeQuery($sql, 'order_cart_rules');
@@ -473,9 +474,10 @@ class FullmetrixStreamExporter
         if (is_array($rows)) {
             foreach ($rows as $row) {
                 $oid = (int) $row['id_order'];
+                $code = trim((string) ($row['coupon_code'] ?? ''));
                 $map[$oid][] = [
                     'id' => (int) $row['id_cart_rule'],
-                    'code' => (string) ($row['name'] ?? ''),
+                    'code' => $code !== '' ? $code : (string) ($row['name'] ?? ''),
                     'discount' => (string) round((float) $row['discount_value'], 2),
                 ];
             }
