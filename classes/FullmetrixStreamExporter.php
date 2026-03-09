@@ -1260,12 +1260,18 @@ class FullmetrixStreamExporter
                        cu.firstname AS customer_firstname,
                        cu.lastname AS customer_lastname,
                        cur.iso_code AS currency_code,
-                       o.id_order, o.date_add AS order_date
+                       o.id_order, o.date_add AS order_date,
+                       COALESCE(a.phone_mobile, a.phone) AS address_phone,
+                       fcc.email AS captured_email,
+                       fcc.phone AS captured_phone
                 FROM ' . $this->prefix . 'cart c
                 LEFT JOIN ' . $this->prefix . 'customer cu
                     ON (c.id_customer = cu.id_customer AND c.id_customer > 0)
                 LEFT JOIN ' . $this->prefix . 'currency cur ON (c.id_currency = cur.id_currency)
                 LEFT JOIN ' . $this->prefix . 'orders o ON (c.id_cart = o.id_cart)
+                LEFT JOIN ' . $this->prefix . 'address a
+                    ON (a.id_address = COALESCE(NULLIF(c.id_address_delivery, 0), c.id_address_invoice))
+                LEFT JOIN ' . $this->prefix . 'fullmetrix_cart_contacts fcc ON (fcc.id_cart = c.id_cart)
                 WHERE c.id_cart > ' . (int) $lastId . '
                 AND EXISTS (
                     SELECT 1 FROM ' . $this->prefix . 'cart_product cp2
@@ -1315,6 +1321,12 @@ class FullmetrixStreamExporter
                     ($row['customer_firstname'] ?? '') . ' ' . ($row['customer_lastname'] ?? '')
                 );
 
+                // Priority: captured > customer > address
+                $email = !empty($row['captured_email']) ? $row['captured_email']
+                    : (!empty($row['customer_email']) ? $row['customer_email'] : null);
+                $phone = !empty($row['captured_phone']) ? $row['captured_phone']
+                    : (!empty($row['address_phone']) ? $row['address_phone'] : null);
+
                 $this->sendLine([
                     'type' => 'cart',
                     'data' => [
@@ -1326,8 +1338,8 @@ class FullmetrixStreamExporter
                         'discount_total' => '0',
                         'shipping_total' => '0',
                         'tax_total' => '0',
-                        'customer_email' => !empty($row['customer_email'])
-                            ? (string) $row['customer_email'] : null,
+                        'customer_email' => $email ? (string) $email : null,
+                        'customer_phone' => $phone ? (string) $phone : null,
                         'customer_name' => $customerName !== '' ? $customerName : null,
                         'customer_id' => (int) $row['id_customer'] > 0
                             ? (int) $row['id_customer'] : null,

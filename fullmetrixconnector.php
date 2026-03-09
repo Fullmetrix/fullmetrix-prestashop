@@ -12,7 +12,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixUpdater.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.hehocom.fr/api/plugin';
-    const FULLMETRIX_VERSION = '3.6.0';
+    const FULLMETRIX_VERSION = '3.7.0';
 
     public function __construct()
     {
@@ -35,6 +35,8 @@ class FullmetrixConnector extends Module
     {
         return parent::install()
             && $this->registerHook('displayBackOfficeHeader')
+            && $this->registerHook('displayHeader')
+            && $this->createCartContactsTable()
             && Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '')
             && Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '')
             && Configuration::updateValue('FULLMETRIX_REGISTERED', false)
@@ -43,8 +45,23 @@ class FullmetrixConnector extends Module
             && Configuration::updateValue('FULLMETRIX_SYNC_IN_PROGRESS', '');
     }
 
+    private function createCartContactsTable()
+    {
+        $sql = 'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'fullmetrix_cart_contacts` (
+            `id_cart` INT(10) UNSIGNED NOT NULL,
+            `email` VARCHAR(255) DEFAULT NULL,
+            `phone` VARCHAR(50) DEFAULT NULL,
+            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id_cart`)
+        ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4';
+
+        return Db::getInstance()->execute($sql);
+    }
+
     public function uninstall()
     {
+        Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'fullmetrix_cart_contacts`');
+
         return parent::uninstall()
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_CODE')
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_SECRET')
@@ -58,6 +75,72 @@ class FullmetrixConnector extends Module
     {
         // Trigger update check in background (cached 12h)
         FullmetrixUpdater::checkForUpdate();
+    }
+
+    public function hookDisplayHeader()
+    {
+        // Only on checkout pages
+        $controller = Tools::getValue('controller');
+        if (!in_array($controller, ['order', 'orderopc', 'checkout', 'supercheckout'])) {
+            return '';
+        }
+
+        $cartId = (int) $this->context->cart->id;
+        if ($cartId <= 0) {
+            return '';
+        }
+
+        $ajaxUrl = $this->context->link->getModuleLink(
+            $this->name,
+            'capturecontact',
+            [],
+            true
+        );
+
+        return '<script>
+(function() {
+    "use strict";
+    var cartId = ' . $cartId . ';
+    var ajaxUrl = "' . addslashes($ajaxUrl) . '";
+    var emailCaptured = false;
+    var phoneCaptured = false;
+
+    function send(data) {
+        var params = "cart_id=" + cartId;
+        if (data.email) params += "&email=" + encodeURIComponent(data.email);
+        if (data.phone) params += "&phone=" + encodeURIComponent(data.phone);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", ajaxUrl);
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        xhr.send(params);
+    }
+
+    function captureEmail(val) {
+        if (!val || emailCaptured) return;
+        val = val.trim();
+        if (val.indexOf("@") < 1 || val.lastIndexOf(".") < val.indexOf("@") + 2) return;
+        emailCaptured = true;
+        send({ email: val });
+    }
+
+    function capturePhone(val) {
+        if (!val || phoneCaptured) return;
+        val = val.trim().replace(/[\s\-().]/g, "");
+        if (val.length < 7) return;
+        phoneCaptured = true;
+        send({ phone: val });
+    }
+
+    document.addEventListener("focusout", function(e) {
+        var t = e.target;
+        if (!t || !t.name) return;
+        var n = t.name.toLowerCase();
+        if (n.indexOf("email") !== -1 || t.type === "email") captureEmail(t.value);
+        if (n.indexOf("phone") !== -1 || t.type === "tel") capturePhone(t.value);
+    }, true);
+})();
+</script>';
     }
 
     public function getContent()
