@@ -1,5 +1,5 @@
 {
-  "version": "3.6.0",
+  "version": "3.7.0",
   "minimumRequired": "3.0.0",
-  "changelog": "Fix: compatibilite PrestaShop 8.2 - colonne value_tax_incl manquante dans order_cart_rule. Fix: safeQuery catch PDOException pour eviter crash silencieux du stream orders."
+  "changelog": "Ajout: capture des contacts newsletter et compte client. Ajout: support des upgrades automatiques via fichiers upgrade/upgrade-x.x.x.php."
 }
