@@ -13,7 +13,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixWebhookSender.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.hehocom.fr/api/plugin';
-    const FULLMETRIX_VERSION = '3.7.0';
+    const FULLMETRIX_VERSION = '4.0.0';
 
     public function __construct()
     {
