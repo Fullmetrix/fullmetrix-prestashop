@@ -1248,12 +1248,25 @@ class FullmetrixStreamExporter
         $lastId = 0;
         $abandonThreshold = date('Y-m-d H:i:s', strtotime('-60 minutes'));
 
+        // Check if cart_contacts table exists (may not on older installs)
+        $contactsTable = $this->prefix . 'fullmetrix_cart_contacts';
+        $hasContactsTable = (bool) Db::getInstance()->executeS(
+            "SHOW TABLES LIKE '" . pSQL($contactsTable) . "'"
+        );
+
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
             $sinceWhere = " AND c.date_upd > '" . pSQL($since) . "'";
         }
 
         do {
+            $contactsSelect = $hasContactsTable
+                ? ', fcc.email AS captured_email, fcc.phone AS captured_phone'
+                : ', NULL AS captured_email, NULL AS captured_phone';
+            $contactsJoin = $hasContactsTable
+                ? 'LEFT JOIN ' . $contactsTable . ' fcc ON (fcc.id_cart = c.id_cart)'
+                : '';
+
             $sql = 'SELECT c.id_cart, c.id_customer, c.id_currency,
                        c.date_add, c.date_upd,
                        cu.email AS customer_email,
@@ -1261,9 +1274,8 @@ class FullmetrixStreamExporter
                        cu.lastname AS customer_lastname,
                        cur.iso_code AS currency_code,
                        o.id_order, o.date_add AS order_date,
-                       COALESCE(a.phone_mobile, a.phone) AS address_phone,
-                       fcc.email AS captured_email,
-                       fcc.phone AS captured_phone
+                       COALESCE(a.phone_mobile, a.phone) AS address_phone
+                       ' . $contactsSelect . '
                 FROM ' . $this->prefix . 'cart c
                 LEFT JOIN ' . $this->prefix . 'customer cu
                     ON (c.id_customer = cu.id_customer AND c.id_customer > 0)
@@ -1271,7 +1283,7 @@ class FullmetrixStreamExporter
                 LEFT JOIN ' . $this->prefix . 'orders o ON (c.id_cart = o.id_cart)
                 LEFT JOIN ' . $this->prefix . 'address a
                     ON (a.id_address = COALESCE(NULLIF(c.id_address_delivery, 0), c.id_address_invoice))
-                LEFT JOIN ' . $this->prefix . 'fullmetrix_cart_contacts fcc ON (fcc.id_cart = c.id_cart)
+                ' . $contactsJoin . '
                 WHERE c.id_cart > ' . (int) $lastId . '
                 AND EXISTS (
                     SELECT 1 FROM ' . $this->prefix . 'cart_product cp2
