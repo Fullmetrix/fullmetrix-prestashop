@@ -1,0 +1,124 @@
+<?php
+
+if (!defined('_PS_VERSION_')) {
+    exit;
+}
+
+/**
+ * Fullmetrix Webhook Sender for PrestaShop
+ *
+ * Queue + flush design: hooks enqueue {entity_type, id} pairs,
+ * then the shutdown hook deduplicates and sends one POST per entity.
+ * Uses stream_context_create with timeout for fire-and-forget.
+ */
+class FullmetrixWebhookSender
+{
+    /** @var array<string, array{type: string, id: int|string}> */
+    private static $queue = [];
+
+    /** @var bool */
+    private static $shutdownRegistered = false;
+
+    public static function init()
+    {
+        // Only activate if webhooks flag is set
+        if (!Configuration::get('FULLMETRIX_WEBHOOKS_ENABLED')) {
+            return;
+        }
+
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        if (empty($secret) || empty($code)) {
+            return;
+        }
+
+        if (!self::$shutdownRegistered) {
+            register_shutdown_function([__CLASS__, 'flushQueue']);
+            self::$shutdownRegistered = true;
+        }
+    }
+
+    /**
+     * Enqueue an entity to be sent as a webhook at shutdown.
+     *
+     * @param string     $entityType order|customer|product|category|coupon|refund
+     * @param int|string $id
+     */
+    public static function enqueue($entityType, $id)
+    {
+        if (!Configuration::get('FULLMETRIX_WEBHOOKS_ENABLED')) {
+            return;
+        }
+
+        $key = $entityType . ':' . $id;
+        self::$queue[$key] = [
+            'type' => $entityType,
+            'id' => $id,
+        ];
+
+        if (!self::$shutdownRegistered) {
+            register_shutdown_function([__CLASS__, 'flushQueue']);
+            self::$shutdownRegistered = true;
+        }
+    }
+
+    public static function flushQueue()
+    {
+        if (empty(self::$queue)) {
+            return;
+        }
+
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        if (empty($secret) || empty($code)) {
+            return;
+        }
+
+        $exporter = new FullmetrixStreamExporter();
+        $apiUrl = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/ecommerce';
+
+        foreach (self::$queue as $entry) {
+            $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
+            if ($data === null) {
+                continue;
+            }
+
+            $payload = json_encode([
+                'event' => $entry['type'] . '.updated',
+                'entity_type' => $entry['type'],
+                'data' => $data,
+                'plugin_version' => FullmetrixConnector::FULLMETRIX_VERSION,
+                'timestamp' => round(microtime(true) * 1000),
+            ], JSON_UNESCAPED_UNICODE);
+
+            if ($payload === false) {
+                continue;
+            }
+
+            $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
+
+            $httpHeaders = "Content-Type: application/json\r\n";
+            foreach ($headers as $name => $value) {
+                $httpHeaders .= $name . ': ' . $value . "\r\n";
+            }
+
+            $context = stream_context_create([
+                'http' => [
+                    'method' => 'POST',
+                    'header' => $httpHeaders,
+                    'content' => $payload,
+                    'timeout' => 5,
+                    'ignore_errors' => true,
+                ],
+                'ssl' => [
+                    'verify_peer' => true,
+                ],
+            ]);
+
+            // Fire-and-forget — ignore result
+            @file_get_contents($apiUrl, false, $context);
+        }
+
+        self::$queue = [];
+    }
+}

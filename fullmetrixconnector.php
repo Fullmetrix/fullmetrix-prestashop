@@ -8,11 +8,12 @@ require_once dirname(__FILE__) . '/classes/FullmetrixSecurity.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixFastExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixStreamExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixUpdater.php';
+require_once dirname(__FILE__) . '/classes/FullmetrixWebhookSender.php';
 
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.hehocom.fr/api/plugin';
-    const FULLMETRIX_VERSION = '3.7.0';
+    const FULLMETRIX_VERSION = '4.0.0';
 
     public function __construct()
     {
@@ -29,6 +30,8 @@ class FullmetrixConnector extends Module
         $this->displayName = $this->l('Fullmetrix');
         $this->description = $this->l('Connectez votre boutique PrestaShop à Fullmetrix pour synchroniser vos commandes.');
         $this->confirmUninstall = $this->l('Êtes-vous sûr de vouloir désinstaller le module Fullmetrix ?');
+
+        FullmetrixWebhookSender::init();
     }
 
     public function install()
@@ -36,6 +39,17 @@ class FullmetrixConnector extends Module
         return parent::install()
             && $this->registerHook('displayBackOfficeHeader')
             && $this->registerHook('displayHeader')
+            // Webhook hooks
+            && $this->registerHook('actionValidateOrder')
+            && $this->registerHook('actionOrderStatusUpdate')
+            && $this->registerHook('actionCustomerAccountUpdate')
+            && $this->registerHook('actionObjectCustomerUpdateAfter')
+            && $this->registerHook('actionProductUpdate')
+            && $this->registerHook('actionProductAdd')
+            && $this->registerHook('actionUpdateQuantity')
+            && $this->registerHook('actionObjectCartRuleUpdateAfter')
+            && $this->registerHook('actionOrderSlipAdd')
+            && $this->registerHook('actionCategoryUpdate')
             && $this->createCartContactsTable()
             && Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '')
             && Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '')
@@ -142,6 +156,90 @@ class FullmetrixConnector extends Module
 })();
 </script>';
     }
+
+    // ─── Webhook hook handlers ────────────────────────────────────────
+
+    public function hookActionValidateOrder($params)
+    {
+        if (isset($params['order'])) {
+            FullmetrixWebhookSender::enqueue('order', (int) $params['order']->id);
+        }
+    }
+
+    public function hookActionOrderStatusUpdate($params)
+    {
+        if (isset($params['id_order'])) {
+            FullmetrixWebhookSender::enqueue('order', (int) $params['id_order']);
+        }
+    }
+
+    public function hookActionCustomerAccountUpdate($params)
+    {
+        if (isset($params['customer'])) {
+            FullmetrixWebhookSender::enqueue('customer', (int) $params['customer']->id);
+        }
+    }
+
+    public function hookActionObjectCustomerUpdateAfter($params)
+    {
+        if (isset($params['object'])) {
+            FullmetrixWebhookSender::enqueue('customer', (int) $params['object']->id);
+        }
+    }
+
+    public function hookActionProductUpdate($params)
+    {
+        if (isset($params['id_product'])) {
+            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+        } elseif (isset($params['product'])) {
+            FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+        }
+    }
+
+    public function hookActionProductAdd($params)
+    {
+        if (isset($params['id_product'])) {
+            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+        } elseif (isset($params['product'])) {
+            FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+        }
+    }
+
+    public function hookActionUpdateQuantity($params)
+    {
+        if (isset($params['id_product'])) {
+            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+        }
+    }
+
+    public function hookActionObjectCartRuleUpdateAfter($params)
+    {
+        if (isset($params['object'])) {
+            FullmetrixWebhookSender::enqueue('coupon', (int) $params['object']->id);
+        }
+    }
+
+    public function hookActionOrderSlipAdd($params)
+    {
+        if (isset($params['order'])) {
+            // Get the latest slip for this order
+            $orderId = (int) $params['order']->id;
+            $sql = 'SELECT MAX(id_order_slip) FROM ' . _DB_PREFIX_ . 'order_slip WHERE id_order = ' . $orderId;
+            $slipId = (int) Db::getInstance()->getValue($sql);
+            if ($slipId > 0) {
+                FullmetrixWebhookSender::enqueue('refund', $slipId);
+            }
+        }
+    }
+
+    public function hookActionCategoryUpdate($params)
+    {
+        if (isset($params['category'])) {
+            FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
+        }
+    }
+
+    // ─── Admin content ───────────────────────────────────────────────
 
     public function getContent()
     {

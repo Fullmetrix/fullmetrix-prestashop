@@ -1537,4 +1537,359 @@ class FullmetrixStreamExporter
             default: return $num;
         }
     }
+
+    // ─── SINGLE ENTITY FORMAT (for webhooks) ─────────────────────────
+
+    /**
+     * Format a single entity by type and ID, returning the same data shape
+     * as the NDJSON stream. Returns null if entity not found.
+     *
+     * @param string     $entityType order|customer|product|category|coupon|refund
+     * @param int|string $id
+     * @return array|null
+     */
+    public function formatSingleEntity($entityType, $id)
+    {
+        $id = (int) $id;
+        if ($id <= 0) {
+            return null;
+        }
+
+        switch ($entityType) {
+            case 'order':
+                return $this->formatSingleOrder($id);
+            case 'customer':
+                return $this->formatSingleCustomer($id);
+            case 'product':
+                return $this->formatSingleProduct($id);
+            case 'category':
+                return $this->formatSingleCategory($id);
+            case 'coupon':
+                return $this->formatSingleCoupon($id);
+            case 'refund':
+                return $this->formatSingleRefund($id);
+            default:
+                return null;
+        }
+    }
+
+    private function formatSingleOrder($orderId)
+    {
+        $optionalCols = $this->detectOrderColumns();
+        $wrappingCol = $optionalCols['total_wrapping_tax_incl']
+            ? ', o.total_wrapping_tax_incl'
+            : ', 0 AS total_wrapping_tax_incl';
+        $noteCol = $optionalCols['note'] ? ', o.note' : ", '' AS note";
+
+        $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
+                   o.id_address_delivery, o.id_address_invoice,
+                   o.current_state, o.module AS payment_method,
+                   o.payment AS payment_method_title,
+                   o.total_paid_tax_incl, o.total_paid_tax_excl,
+                   o.total_discounts_tax_incl,
+                   o.total_shipping_tax_incl
+                   ' . $wrappingCol . ',
+                   o.total_products, o.total_products_wt,
+                   o.invoice_number, o.delivery_number
+                   ' . $noteCol . ',
+                   o.date_add, o.date_upd,
+                   osl.name AS status_name,
+                   c.email AS customer_email,
+                   cur.iso_code AS currency_code
+            FROM ' . $this->prefix . 'orders o
+            LEFT JOIN ' . $this->prefix . 'order_state_lang osl
+                ON (o.current_state = osl.id_order_state AND osl.id_lang = ' . $this->idLang . ')
+            LEFT JOIN ' . $this->prefix . 'customer c ON (o.id_customer = c.id_customer)
+            LEFT JOIN ' . $this->prefix . 'currency cur ON (o.id_currency = cur.id_currency)
+            WHERE o.id_order = ' . $orderId;
+
+        $rows = $this->safeQuery($sql, 'single_order');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        $addressIds = array_unique(array_filter([
+            (int) $row['id_address_invoice'],
+            (int) $row['id_address_delivery'],
+        ]));
+        $addressMap = $this->batchLoadAddresses($addressIds);
+        $lineItemsMap = $this->batchLoadOrderLineItems((string) $orderId);
+        $carriersMap = $this->batchLoadOrderCarriers((string) $orderId);
+        $couponMap = $this->batchLoadOrderCartRules((string) $orderId);
+        $paymentMap = $this->batchLoadOrderPayments([pSQL($row['reference'])]);
+
+        $totalTaxIncl = (float) $row['total_paid_tax_incl'];
+        $totalTaxExcl = (float) $row['total_paid_tax_excl'];
+        $tax = max(0, $totalTaxIncl - $totalTaxExcl);
+
+        $billing = $this->formatAddress($addressMap[(int) $row['id_address_invoice']] ?? null);
+        $shipping = $this->formatAddress($addressMap[(int) $row['id_address_delivery']] ?? null);
+        $billing['email'] = (string) ($row['customer_email'] ?? '');
+
+        return [
+            'id' => $orderId,
+            'number' => (string) ($row['reference'] ?: $orderId),
+            'status' => (string) ($row['status_name'] ?: 'unknown'),
+            'currency' => (string) ($row['currency_code'] ?: 'EUR'),
+            'total' => (string) round($totalTaxIncl, 2),
+            'discount_total' => (string) round((float) $row['total_discounts_tax_incl'], 2),
+            'shipping_total' => (string) round((float) $row['total_shipping_tax_incl'], 2),
+            'total_tax' => (string) round($tax, 2),
+            'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
+            'date_modified' => $row['date_upd'] ? gmdate('c', strtotime($row['date_upd'])) : null,
+            'date_paid' => null,
+            'payment_method' => (string) ($row['payment_method'] ?? ''),
+            'payment_method_title' => (string) ($row['payment_method_title'] ?? ''),
+            'customer_id' => (int) $row['id_customer'],
+            'customer_note' => (string) ($row['note'] ?? ''),
+            'billing' => $billing,
+            'shipping' => $shipping,
+            'line_items' => $lineItemsMap[$orderId] ?? [],
+            'shipping_lines' => $carriersMap[$orderId] ?? [],
+            'fee_lines' => [],
+            'coupon_lines' => $couponMap[$orderId] ?? [],
+            'tax_lines' => [],
+            'payments' => $paymentMap[$row['reference']] ?? [],
+        ];
+    }
+
+    private function formatSingleCustomer($customerId)
+    {
+        $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
+                   c.company, c.birthday, c.newsletter, c.optin,
+                   c.id_gender, c.date_add, c.date_upd,
+                   gl.name AS gender_name
+            FROM ' . $this->prefix . 'customer c
+            LEFT JOIN ' . $this->prefix . 'gender_lang gl
+                ON (c.id_gender = gl.id_gender AND gl.id_lang = ' . $this->idLang . ')
+            WHERE c.deleted = 0 AND c.id_customer = ' . $customerId;
+
+        $rows = $this->safeQuery($sql, 'single_customer');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        $addrMap = $this->batchLoadCustomerAddresses((string) $customerId);
+        $statsMap = $this->batchLoadCustomerStats((string) $customerId);
+
+        $addresses = $addrMap[$customerId] ?? [];
+        $stats = $statsMap[$customerId] ?? ['order_count' => 0, 'total_spent' => 0];
+
+        $primaryAddr = !empty($addresses) ? $addresses[0] : null;
+        $billing = $this->formatAddress($primaryAddr);
+        $billing['email'] = (string) $row['email'];
+
+        $shippingAddr = count($addresses) > 1 ? $addresses[1] : $primaryAddr;
+        $shipping = $this->formatAddress($shippingAddr);
+
+        $phone = $billing['phone'] ?: ($shipping['phone'] ?? '');
+        $city = $billing['city'] ?: ($shipping['city'] ?? '');
+        $country = $billing['country'] ?: ($shipping['country'] ?? '');
+
+        $metaData = [];
+        if (!empty($row['newsletter'])) {
+            $metaData[] = ['key' => 'newsletter', 'value' => (string) $row['newsletter']];
+        }
+        if (!empty($row['birthday']) && $row['birthday'] !== '0000-00-00') {
+            $metaData[] = ['key' => 'birthday', 'value' => (string) $row['birthday']];
+        }
+        if (!empty($row['gender_name'])) {
+            $metaData[] = ['key' => 'gender', 'value' => (string) $row['gender_name']];
+        }
+        if ($stats['order_count'] > 0) {
+            $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
+            $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
+        }
+
+        return [
+            'id' => $customerId,
+            'email' => (string) $row['email'],
+            'first_name' => (string) $row['firstname'],
+            'last_name' => (string) $row['lastname'],
+            'company' => (string) ($row['company'] ?? ''),
+            'phone' => $phone,
+            'city' => $city,
+            'country' => $country,
+            'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
+            'billing' => $billing,
+            'shipping' => $shipping,
+            'meta_data' => $metaData,
+        ];
+    }
+
+    private function formatSingleProduct($productId)
+    {
+        $sql = 'SELECT p.id_product, p.reference, p.price, p.wholesale_price,
+                   p.active, p.weight, p.width, p.height, p.depth,
+                   p.ean13, p.upc, p.isbn, p.condition, p.visibility,
+                   p.on_sale, p.date_add, p.date_upd,
+                   pl.name, pl.description, pl.description_short, pl.link_rewrite,
+                   sa.quantity AS stock_quantity
+            FROM ' . $this->prefix . 'product p
+            LEFT JOIN ' . $this->prefix . 'product_lang pl
+                ON (p.id_product = pl.id_product AND pl.id_lang = ' . $this->idLang . ' AND pl.id_shop = ' . $this->idShop . ')
+            LEFT JOIN ' . $this->prefix . 'stock_available sa
+                ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND sa.id_shop = ' . $this->idShop . ')
+            WHERE p.id_product = ' . $productId;
+
+        $rows = $this->safeQuery($sql, 'single_product');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        $pid = (int) $row['id_product'];
+        $pidList = (string) $pid;
+        $basePrices = [$pid => (float) $row['price']];
+
+        $categoriesMap = $this->batchLoadProductCategories($pidList);
+        $tagsMap = $this->batchLoadProductTags($pidList);
+        $imagesMap = $this->batchLoadProductImages($pidList);
+        $salePriceMap = $this->batchLoadSpecificPrices($pidList, $basePrices);
+
+        $stockQty = min((int) ($row['stock_quantity'] ?? 0), 2147483647);
+        $images = $imagesMap[$pid] ?? [];
+        $imageUrl = !empty($images) ? $images[0] : null;
+        $imageList = array_map(function ($src) { return ['src' => $src]; }, $images);
+        $salePrice = $salePriceMap[$pid] ?? null;
+
+        return [
+            'id' => $pid,
+            'name' => (string) ($row['name'] ?? ''),
+            'slug' => (string) ($row['link_rewrite'] ?? ''),
+            'type' => 'simple',
+            'status' => $row['active'] ? 'publish' : 'draft',
+            'description' => (string) ($row['description'] ?? ''),
+            'short_description' => (string) ($row['description_short'] ?? ''),
+            'sku' => (string) ($row['reference'] ?? ''),
+            'price' => (string) round((float) $row['price'], 2),
+            'regular_price' => (string) round((float) $row['price'], 2),
+            'sale_price' => $salePrice,
+            'on_sale' => !empty($salePrice),
+            'stock_status' => $stockQty > 0 ? 'instock' : 'outofstock',
+            'stock_quantity' => $stockQty,
+            'manage_stock' => true,
+            'weight' => (string) ($row['weight'] ?? ''),
+            'ean13' => (string) ($row['ean13'] ?? ''),
+            'upc' => (string) ($row['upc'] ?? ''),
+            'isbn' => (string) ($row['isbn'] ?? ''),
+            'condition' => (string) ($row['condition'] ?? 'new'),
+            'wholesale_price' => (string) round((float) ($row['wholesale_price'] ?? 0), 2),
+            'category_ids' => $categoriesMap[$pid] ?? [],
+            'tags' => $tagsMap[$pid] ?? [],
+            'parent_id' => null,
+            'image_url' => $imageUrl,
+            'images' => $imageList,
+            'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
+            'date_modified' => $row['date_upd'] ? gmdate('c', strtotime($row['date_upd'])) : null,
+        ];
+    }
+
+    private function formatSingleCategory($categoryId)
+    {
+        $sql = 'SELECT c.id_category, c.id_parent, c.active, c.date_add, c.date_upd,
+                   cl.name, cl.description, cl.link_rewrite,
+                   (SELECT COUNT(*) FROM ' . $this->prefix . 'category_product cp
+                    WHERE cp.id_category = c.id_category) AS product_count
+            FROM ' . $this->prefix . 'category c
+            LEFT JOIN ' . $this->prefix . 'category_lang cl
+                ON (c.id_category = cl.id_category AND cl.id_lang = ' . $this->idLang . ' AND cl.id_shop = ' . $this->idShop . ')
+            WHERE c.id_category = ' . $categoryId;
+
+        $rows = $this->safeQuery($sql, 'single_category');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        return [
+            'id' => (int) $row['id_category'],
+            'name' => (string) ($row['name'] ?? ''),
+            'slug' => (string) ($row['link_rewrite'] ?? ''),
+            'parent_id' => (int) $row['id_parent'] ?: null,
+            'description' => (string) ($row['description'] ?? ''),
+            'count' => (int) ($row['product_count'] ?? 0),
+            'image_url' => null,
+        ];
+    }
+
+    private function formatSingleCoupon($cartRuleId)
+    {
+        $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
+                   cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
+                   cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
+                   cr.minimum_amount, cr.minimum_amount_currency,
+                   cr.date_from, cr.date_to, cr.date_add,
+                   crl.name,
+                   (SELECT COUNT(DISTINCT ocr.id_order) FROM ' . $this->prefix . 'order_cart_rule ocr
+                    WHERE ocr.id_cart_rule = cr.id_cart_rule) AS usage_count
+            FROM ' . $this->prefix . 'cart_rule cr
+            LEFT JOIN ' . $this->prefix . 'cart_rule_lang crl
+                ON (cr.id_cart_rule = crl.id_cart_rule AND crl.id_lang = ' . $this->idLang . ')
+            WHERE cr.id_cart_rule = ' . $cartRuleId;
+
+        $rows = $this->safeQuery($sql, 'single_coupon');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        $discountType = 'fixed_cart';
+        $amount = (float) $row['reduction_amount'];
+        if ((float) $row['reduction_percent'] > 0) {
+            $discountType = 'percent';
+            $amount = (float) $row['reduction_percent'];
+        }
+
+        return [
+            'id' => (int) $row['id_cart_rule'],
+            'code' => (string) ($row['code'] ?? ''),
+            'description' => (string) ($row['description'] ?? ''),
+            'discount_type' => $discountType,
+            'amount' => (string) $amount,
+            'usage_count' => (int) ($row['usage_count'] ?? 0),
+            'usage_limit' => (int) ($row['quantity'] ?? 0),
+            'usage_limit_per_user' => (int) ($row['quantity_per_user'] ?? 0),
+            'free_shipping' => (bool) $row['free_shipping'],
+            'minimum_amount' => (string) ((float) ($row['minimum_amount'] ?? 0)),
+            'maximum_amount' => null,
+            'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
+            'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
+                ? gmdate('c', strtotime($row['date_to'])) : null,
+        ];
+    }
+
+    private function formatSingleRefund($slipId)
+    {
+        $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
+                   os.total_products_tax_incl, os.total_shipping_tax_incl,
+                   os.amount, os.shipping_cost_amount,
+                   os.date_add
+            FROM ' . $this->prefix . 'order_slip os
+            WHERE os.id_order_slip = ' . $slipId;
+
+        $rows = $this->safeQuery($sql, 'single_refund');
+        if (!is_array($rows) || empty($rows)) {
+            return null;
+        }
+        $row = $rows[0];
+
+        $detailMap = $this->batchLoadSlipDetails((string) $slipId);
+
+        $totalProducts = (float) $row['total_products_tax_incl'];
+        $totalShipping = (float) $row['total_shipping_tax_incl'];
+        $totalAmount = $totalProducts + $totalShipping;
+
+        return [
+            'id' => (int) $row['id_order_slip'],
+            'parent_id' => (int) $row['id_order'],
+            'amount' => (string) round(abs($totalAmount), 2),
+            'reason' => '',
+            'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
+            'refunded_by' => null,
+            'line_items' => $detailMap[$slipId] ?? [],
+        ];
+    }
 }
