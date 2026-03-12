@@ -77,6 +77,14 @@ class FullmetrixWebhookSender
         $exporter = new FullmetrixStreamExporter();
         $apiUrl = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/ecommerce';
 
+        // Build summary for logging
+        $webhookSummary = [];
+        foreach (self::$queue as $entry) {
+            $t = $entry['type'];
+            $webhookSummary[$t] = isset($webhookSummary[$t]) ? $webhookSummary[$t] + 1 : 1;
+        }
+        FullmetrixLogger::log('webhook', 'Envoi de ' . count(self::$queue) . ' webhook(s)', $webhookSummary);
+
         foreach (self::$queue as $entry) {
             $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
             if ($data === null) {

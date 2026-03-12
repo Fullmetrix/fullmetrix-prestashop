@@ -1,5 +1,5 @@
 {
   "version": "4.0.0",
   "minimumRequired": "3.0.0",
-  "changelog": "Ajout: capture des contacts newsletter et compte client. Ajout: support des upgrades automatiques via fichiers upgrade/upgrade-x.x.x.php."
+  "changelog": "Added: newsletter and customer account contact capture. Added: automatic upgrades via upgrade/upgrade-x.x.x.php files."
 }

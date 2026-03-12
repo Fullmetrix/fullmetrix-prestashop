@@ -50,7 +50,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
             $this->handleExport();
         } catch (\Throwable $e) {
-            $this->sendJsonError('Erreur serveur: ' . $e->getMessage(), 500);
+            $this->sendJsonError('Server error: ' . $e->getMessage(), 500);
         }
     }
 
@@ -60,7 +60,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (empty($secret)) {
             return [
-                'error' => 'Plugin non configuré',
+                'error' => 'Plugin not configured',
                 'status' => 401,
             ];
         }
@@ -71,7 +71,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (empty($signature) || empty($timestamp) || empty($code)) {
             return [
-                'error' => 'En-têtes d\'authentification manquants',
+                'error' => 'Missing authentication headers',
                 'status' => 401,
             ];
         }
@@ -79,7 +79,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $storedCode = Configuration::get('FULLMETRIX_CONNECTION_CODE');
         if ($code !== $storedCode) {
             return [
-                'error' => 'Code de connexion invalide',
+                'error' => 'Invalid connection code',
                 'status' => 401,
             ];
         }
@@ -90,7 +90,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (!$isValid) {
             return [
-                'error' => 'Signature invalide ou expirée',
+                'error' => 'Invalid or expired signature',
                 'status' => 401,
             ];
         }
@@ -115,10 +115,15 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $entity = Tools::getValue('entity', '');
             $validEntities = ['orders', 'customers', 'products', 'categories', 'coupons', 'refunds', 'carts'];
             if (!in_array($entity, $validEntities, true)) {
-                $this->sendJsonError('Entity invalide', 400);
+                $this->sendJsonError('Invalid entity', 400);
                 return;
             }
             $this->handleStreamEntity($entity, $syncType, $since);
+            return;
+        }
+
+        if ($type === 'counts') {
+            $this->handleCounts();
             return;
         }
 
@@ -208,6 +213,33 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         ]);
     }
 
+    private function handleCounts()
+    {
+        $db = \Db::getInstance();
+        $prefix = _DB_PREFIX_;
+
+        $orders = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}orders` WHERE `id_order` > 0");
+        $customers = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}customer` WHERE `deleted` = 0 AND `id_customer` > 0");
+        $products = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}product` WHERE `id_product` > 0");
+        $categories = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}category` WHERE `id_category` > 0");
+        $coupons = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}cart_rule` WHERE `id_cart_rule` > 0");
+        $carts = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}cart` WHERE `id_cart` > 0");
+        $refunds = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}order_slip` WHERE `id_order_slip` > 0");
+
+        $this->sendJson([
+            'success' => true,
+            'counts' => [
+                'orders' => $orders,
+                'customers' => $customers,
+                'products' => $products,
+                'categories' => $categories,
+                'coupons' => $coupons,
+                'carts' => $carts,
+                'refunds' => $refunds,
+            ],
+        ]);
+    }
+
     private function handleSettings()
     {
         $this->sendJson([
@@ -268,6 +300,11 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             'sync_type' => $syncType,
             'started_at' => time(),
         ]));
+
+        FullmetrixLogger::log('sync_start', 'Sync started', [
+            'type' => $type,
+            'sync_type' => $syncType,
+        ]);
     }
 
     private function trackSyncComplete($type, $result)
@@ -277,10 +314,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         $entityLabels = [
-            'orders' => 'Commandes',
-            'products' => 'Produits',
-            'categories' => 'Catégories',
-            'customers' => 'Clients',
+            'orders' => 'Orders',
+            'products' => 'Products',
+            'categories' => 'Categories',
+            'customers' => 'Customers',
             'coupons' => 'Coupons',
         ];
 
@@ -318,6 +355,11 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         Configuration::updateValue('FULLMETRIX_LAST_SYNC', json_encode($stats));
+
+        FullmetrixLogger::log('sync_complete', 'Sync completed', [
+            'type' => $type,
+            'entities' => $stats['entities'],
+        ]);
     }
 
     private function getHeader($name)

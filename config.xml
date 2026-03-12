@@ -3,7 +3,7 @@
     <name>fullmetrixconnector</name>
     <displayName><![CDATA[Fullmetrix]]></displayName>
     <version><![CDATA[4.0.0]]></version>
-    <description><![CDATA[Connectez votre boutique PrestaShop a Fullmetrix pour synchroniser vos commandes.]]></description>
+    <description><![CDATA[Connect your PrestaShop store to Fullmetrix to sync your orders.]]></description>
     <author><![CDATA[Fullmetrix]]></author>
     <tab><![CDATA[analytics_stats]]></tab>
     <is_configurable>1</is_configurable>
