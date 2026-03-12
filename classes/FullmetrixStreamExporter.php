@@ -44,28 +44,37 @@ class FullmetrixStreamExporter
 
         $count = 0;
 
-        switch ($entity) {
-            case 'orders':
-                $count = $this->streamOrdersFast($syncType, $since);
-                break;
-            case 'refunds':
-                $count = $this->streamRefundsFast($syncType, $since);
-                break;
-            case 'customers':
-                $count = $this->streamCustomersFast($syncType, $since);
-                break;
-            case 'products':
-                $count = $this->streamProductsFast($syncType, $since);
-                break;
-            case 'categories':
-                $count = $this->streamCategoriesFast($syncType, $since);
-                break;
-            case 'coupons':
-                $count = $this->streamCouponsFast($syncType, $since);
-                break;
-            case 'carts':
-                $count = $this->streamCartsFast($syncType, $since);
-                break;
+        try {
+            switch ($entity) {
+                case 'orders':
+                    $count = $this->streamOrdersFast($syncType, $since);
+                    break;
+                case 'refunds':
+                    $count = $this->streamRefundsFast($syncType, $since);
+                    break;
+                case 'customers':
+                    $count = $this->streamCustomersFast($syncType, $since);
+                    break;
+                case 'products':
+                    $count = $this->streamProductsFast($syncType, $since);
+                    break;
+                case 'categories':
+                    $count = $this->streamCategoriesFast($syncType, $since);
+                    break;
+                case 'coupons':
+                    $count = $this->streamCouponsFast($syncType, $since);
+                    break;
+                case 'carts':
+                    $count = $this->streamCartsFast($syncType, $since);
+                    break;
+            }
+        } catch (\Throwable $e) {
+            $this->sendLine([
+                'type' => 'error',
+                'message' => 'Fatal error streaming ' . $entity . ': ' . $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
         }
 
         $this->sendLine([
@@ -225,7 +234,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'orders');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -545,7 +558,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'refunds');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -645,7 +662,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'customers');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -815,7 +836,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'products');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -1128,7 +1153,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'categories');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -1192,7 +1221,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'coupons');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
@@ -1294,7 +1327,11 @@ class FullmetrixStreamExporter
 
             $rows = $this->safeQuery($sql, 'carts');
 
-            if ($rows === false || empty($rows)) {
+            if ($rows === false) {
+                $lastId += $this->batchSize;
+                continue;
+            }
+            if (empty($rows)) {
                 break;
             }
 
