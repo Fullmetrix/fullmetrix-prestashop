@@ -10,6 +10,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixStreamExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixUpdater.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixWebhookSender.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
+require_once dirname(__FILE__) . '/classes/FullmetrixEventTracker.php';
 
 class FullmetrixConnector extends Module
 {
@@ -51,6 +52,10 @@ class FullmetrixConnector extends Module
             && $this->registerHook('actionObjectCartRuleUpdateAfter')
             && $this->registerHook('actionOrderSlipAdd')
             && $this->registerHook('actionCategoryUpdate')
+            // Event tracking hooks
+            && $this->registerHook('actionCartSave')
+            && $this->registerHook('actionAuthentication')
+            && $this->registerHook('actionCustomerAccountAdd')
             && $this->createCartContactsTable()
             && Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '')
             && Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '')
@@ -96,25 +101,63 @@ class FullmetrixConnector extends Module
 
     public function hookDisplayHeader()
     {
-        // Only on checkout pages
+        $output = '';
+
+        // Check if tracking is enabled (connection configured)
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        $registered = Configuration::get('FULLMETRIX_REGISTERED');
+
+        if (!empty($secret) && !empty($code) && $registered) {
+            // Load tracker script and inject page data
+            $pageData = FullmetrixEventTracker::getPageData($this->context);
+
+            // Get REST API URL for events (local endpoint that forwards to Fullmetrix)
+            $eventsUrl = $this->context->link->getModuleLink($this->name, 'events', array(), true);
+            $identifyUrl = $this->context->link->getModuleLink($this->name, 'identify', array(), true);
+
+            // Use fm_config to match WooCommerce JS tracker expectations
+            $output .= '<script>
+window.fm_config = ' . json_encode(array(
+                'api_url' => $eventsUrl,
+                'identify_url' => $identifyUrl,
+                'nonce' => Tools::getToken(false), // CSRF token
+                'visitor_id' => $pageData['visitor_id'],
+                'session_id' => $pageData['session_id'],
+                'contact' => isset($pageData['customer']) ? $pageData['customer'] : null,
+                'currency' => $this->context->currency->iso_code,
+                'version' => self::FULLMETRIX_VERSION,
+            )) . ';
+</script>';
+
+            // Inject page data for JS tracker
+            $output .= '<script type="application/json" id="fm-page-data">' . json_encode(array(
+                'type' => $pageData['page_type'],
+                'data' => isset($pageData['product']) ? $pageData['product'] : (
+                    isset($pageData['category']) ? $pageData['category'] : (
+                        isset($pageData['cart']) ? $pageData['cart'] : null
+                    )
+                ),
+            ), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) . '</script>';
+
+            $this->context->controller->addJS(
+                $this->_path . 'views/js/fullmetrix-tracker.js'
+            );
+        }
+
+        // Checkout email/phone capture (existing functionality)
         $controller = Tools::getValue('controller');
-        if (!in_array($controller, ['order', 'orderopc', 'checkout', 'supercheckout'])) {
-            return '';
-        }
+        if (in_array($controller, ['order', 'orderopc', 'checkout', 'supercheckout'])) {
+            $cartId = (int) $this->context->cart->id;
+            if ($cartId > 0) {
+                $ajaxUrl = $this->context->link->getModuleLink(
+                    $this->name,
+                    'capturecontact',
+                    [],
+                    true
+                );
 
-        $cartId = (int) $this->context->cart->id;
-        if ($cartId <= 0) {
-            return '';
-        }
-
-        $ajaxUrl = $this->context->link->getModuleLink(
-            $this->name,
-            'capturecontact',
-            [],
-            true
-        );
-
-        return '<script>
+                $output .= '<script>
 (function() {
     "use strict";
     var cartId = ' . $cartId . ';
@@ -158,6 +201,10 @@ class FullmetrixConnector extends Module
     }, true);
 })();
 </script>';
+            }
+        }
+
+        return $output;
     }
 
     // ─── Webhook hook handlers ────────────────────────────────────────
@@ -239,6 +286,56 @@ class FullmetrixConnector extends Module
     {
         if (isset($params['category'])) {
             FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
+        }
+    }
+
+    // ─── Event tracking hooks ────────────────────────────────────────
+
+    /**
+     * Track add to cart events (server-side)
+     */
+    public function hookActionCartSave($params)
+    {
+        // Only track if we have an actual cart modification
+        if (!isset($params['cart']) || !$params['cart']->id) {
+            return;
+        }
+
+        // Get the product being added (from POST data)
+        $idProduct = (int) Tools::getValue('id_product');
+        $quantity = (int) Tools::getValue('qty', 1);
+        $action = Tools::getValue('action');
+
+        // Only track add actions
+        if ($idProduct > 0 && in_array($action, ['add', 'update', ''])) {
+            FullmetrixEventTracker::onAddToCart([
+                'id_product' => $idProduct,
+                'quantity' => max(1, $quantity),
+            ]);
+        }
+    }
+
+    /**
+     * Track customer login (server-side)
+     */
+    public function hookActionAuthentication($params)
+    {
+        if (isset($params['customer'])) {
+            FullmetrixEventTracker::onCustomerLogin([
+                'customer' => $params['customer'],
+            ]);
+        }
+    }
+
+    /**
+     * Track customer registration (server-side)
+     */
+    public function hookActionCustomerAccountAdd($params)
+    {
+        if (isset($params['newCustomer'])) {
+            FullmetrixEventTracker::onCustomerLogin([
+                'customer' => $params['newCustomer'],
+            ]);
         }
     }
 
