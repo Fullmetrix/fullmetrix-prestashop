@@ -1,5 +1,5 @@
 {
-  "version": "4.0.0",
+  "version": "4.1.0",
   "minimumRequired": "3.0.0",
-  "changelog": "Added: newsletter and customer account contact capture. Added: automatic upgrades via upgrade/upgrade-x.x.x.php files."
+  "changelog": "Added: Complete behavioral tracking system (page views, product views, add to cart, checkout, orders). Added: Contact identification with 2-year cookies. Added: Instant event sending with retry mechanism."
 }

@@ -15,7 +15,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixEventTracker.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '4.0.0';
+    const FULLMETRIX_VERSION = '4.1.0';
 
     public function __construct()
     {
