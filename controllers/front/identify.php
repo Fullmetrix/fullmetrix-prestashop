@@ -54,13 +54,10 @@ class FullmetrixConnectorIdentifyModuleFrontController extends ModuleFrontContro
             $this->jsonResponse(['error' => 'Invalid email'], 400);
         }
 
-        // Set contact cookie
+        // Just set the cookie — the JS tracker already sent the identify event
         if (!empty($email)) {
             $this->setContactCookie($email, $phone);
         }
-
-        // Send identify event to Fullmetrix
-        $this->sendIdentifyEvent($email, $phone, $source);
 
         $this->jsonResponse(['success' => true]);
     }
@@ -147,7 +144,7 @@ class FullmetrixConnectorIdentifyModuleFrontController extends ModuleFrontContro
         $timestamp = round(microtime(true) * 1000);
         $signature = hash_hmac('sha256', $timestamp . '.' . $payload, $secret);
 
-        $url = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/events';
+        $url = FullmetrixConnector::getApiBase() . '/../webhooks/events';
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [

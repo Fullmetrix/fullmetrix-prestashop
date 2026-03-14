@@ -64,9 +64,6 @@ class FullmetrixStreamExporter
                 case 'coupons':
                     $count = $this->streamCouponsFast($syncType, $since);
                     break;
-                case 'carts':
-                    $count = $this->streamCartsFast($syncType, $since);
-                    break;
             }
         } catch (\Throwable $e) {
             $this->sendLine([
@@ -109,7 +106,6 @@ class FullmetrixStreamExporter
             'products' => $this->streamProductsFast($syncType, $since),
             'categories' => $this->streamCategoriesFast($syncType, $since),
             'coupons' => $this->streamCouponsFast($syncType, $since),
-            'carts' => $this->streamCartsFast($syncType, $since),
         ];
 
         $this->sendLine([
@@ -164,7 +160,6 @@ class FullmetrixStreamExporter
         }
 
         header('Content-Type: application/x-ndjson');
-        header('Transfer-Encoding: chunked');
         header('X-Accel-Buffering: no');
         header('Cache-Control: no-cache');
         header('Content-Encoding: identity');
@@ -1272,219 +1267,6 @@ class FullmetrixStreamExporter
         ]);
 
         return $count;
-    }
-
-
-    private function streamCartsFast($syncType = 'full', $since = null)
-    {
-        $count = 0;
-        $lastId = 0;
-        $abandonThreshold = date('Y-m-d H:i:s', strtotime('-60 minutes'));
-
-        // Check if cart_contacts table exists (may not on older installs)
-        $contactsTable = $this->prefix . 'fullmetrix_cart_contacts';
-        $hasContactsTable = (bool) Db::getInstance()->executeS(
-            "SHOW TABLES LIKE '" . pSQL($contactsTable) . "'"
-        );
-
-        $sinceWhere = '';
-        if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND c.date_upd > '" . pSQL($since) . "'";
-        }
-
-        do {
-            $contactsSelect = $hasContactsTable
-                ? ', fcc.email AS captured_email, fcc.phone AS captured_phone'
-                : ', NULL AS captured_email, NULL AS captured_phone';
-            $contactsJoin = $hasContactsTable
-                ? 'LEFT JOIN ' . $contactsTable . ' fcc ON (fcc.id_cart = c.id_cart)'
-                : '';
-
-            $sql = 'SELECT c.id_cart, c.id_customer, c.id_currency,
-                       c.date_add, c.date_upd,
-                       cu.email AS customer_email,
-                       cu.firstname AS customer_firstname,
-                       cu.lastname AS customer_lastname,
-                       cur.iso_code AS currency_code,
-                       o.id_order, o.date_add AS order_date,
-                       COALESCE(a.phone_mobile, a.phone) AS address_phone
-                       ' . $contactsSelect . '
-                FROM ' . $this->prefix . 'cart c
-                LEFT JOIN ' . $this->prefix . 'customer cu
-                    ON (c.id_customer = cu.id_customer AND c.id_customer > 0)
-                LEFT JOIN ' . $this->prefix . 'currency cur ON (c.id_currency = cur.id_currency)
-                LEFT JOIN ' . $this->prefix . 'orders o ON (c.id_cart = o.id_cart)
-                LEFT JOIN ' . $this->prefix . 'address a
-                    ON (a.id_address = COALESCE(NULLIF(c.id_address_delivery, 0), c.id_address_invoice))
-                ' . $contactsJoin . '
-                WHERE c.id_cart > ' . (int) $lastId . '
-                AND EXISTS (
-                    SELECT 1 FROM ' . $this->prefix . 'cart_product cp2
-                    WHERE cp2.id_cart = c.id_cart
-                )' . $sinceWhere . '
-                ORDER BY c.id_cart ASC
-                LIMIT ' . $this->batchSize;
-
-            $rows = $this->safeQuery($sql, 'carts');
-
-            if ($rows === false) {
-                $lastId += $this->batchSize;
-                continue;
-            }
-            if (empty($rows)) {
-                break;
-            }
-
-            $cartIds = [];
-            foreach ($rows as $row) {
-                $cartIds[] = (int) $row['id_cart'];
-            }
-            $cartIdsList = implode(',', $cartIds);
-
-            $lineItemsMap = $this->batchLoadCartLineItems($cartIdsList);
-            $couponMap = $this->batchLoadCartCouponCodes($cartIdsList);
-
-            foreach ($rows as $row) {
-                $cartId = (int) $row['id_cart'];
-                $hasOrder = !empty($row['id_order']);
-
-                $status = 'open';
-                if ($hasOrder) {
-                    $status = 'placed';
-                } elseif ($row['date_upd'] < $abandonThreshold) {
-                    $status = 'abandoned';
-                }
-
-                $items = $lineItemsMap[$cartId] ?? [];
-                $itemCount = 0;
-                $subtotal = 0;
-                foreach ($items as $item) {
-                    $itemCount += (int) $item['quantity'];
-                    $subtotal += (float) $item['total'];
-                }
-                $itemCount = min($itemCount, 2147483647);
-
-                $couponCodes = $couponMap[$cartId] ?? [];
-
-                $customerName = trim(
-                    ($row['customer_firstname'] ?? '') . ' ' . ($row['customer_lastname'] ?? '')
-                );
-
-                // Priority: captured > customer > address
-                $email = !empty($row['captured_email']) ? $row['captured_email']
-                    : (!empty($row['customer_email']) ? $row['customer_email'] : null);
-                $phone = !empty($row['captured_phone']) ? $row['captured_phone']
-                    : (!empty($row['address_phone']) ? $row['address_phone'] : null);
-
-                $this->sendLine([
-                    'type' => 'cart',
-                    'data' => [
-                        'token' => 'ps_' . $cartId,
-                        'status' => $status,
-                        'currency' => (string) ($row['currency_code'] ?: 'EUR'),
-                        'total' => (string) round($subtotal, 2),
-                        'subtotal' => (string) round($subtotal, 2),
-                        'discount_total' => '0',
-                        'shipping_total' => '0',
-                        'tax_total' => '0',
-                        'customer_email' => $email ? (string) $email : null,
-                        'customer_phone' => $phone ? (string) $phone : null,
-                        'customer_name' => $customerName !== '' ? $customerName : null,
-                        'customer_id' => (int) $row['id_customer'] > 0
-                            ? (int) $row['id_customer'] : null,
-                        'coupon_codes' => $couponCodes,
-                        'item_count' => $itemCount,
-                        'order_id' => $hasOrder ? (string) $row['id_order'] : null,
-                        'started_at' => $row['date_add']
-                            ? gmdate('c', strtotime($row['date_add'])) : null,
-                        'updated_at' => $row['date_upd']
-                            ? gmdate('c', strtotime($row['date_upd'])) : null,
-                        'converted_at' => $hasOrder && $row['order_date']
-                            ? gmdate('c', strtotime($row['order_date'])) : null,
-                        'line_items' => $items,
-                    ],
-                ]);
-
-                $count++;
-            }
-
-            $lastId = (int) end($rows)['id_cart'];
-            unset($rows, $lineItemsMap, $couponMap);
-            $this->adaptBatchSize();
-            $this->maybeGc();
-        } while (true);
-
-        $this->sendLine([
-            'type' => 'entity_complete',
-            'entity' => 'carts',
-            'count' => $count,
-        ]);
-
-        return $count;
-    }
-
-    private function batchLoadCartLineItems($cartIdsList)
-    {
-        $sql = 'SELECT cp.id_cart, cp.id_product, cp.id_product_attribute, cp.quantity,
-                   pl.name AS product_name,
-                   p.reference AS sku,
-                   COALESCE(ps.price, p.price) AS unit_price
-            FROM ' . $this->prefix . 'cart_product cp
-            LEFT JOIN ' . $this->prefix . 'product_lang pl
-                ON (cp.id_product = pl.id_product AND pl.id_lang = ' . $this->idLang . '
-                    AND pl.id_shop = ' . $this->idShop . ')
-            LEFT JOIN ' . $this->prefix . 'product p ON (cp.id_product = p.id_product)
-            LEFT JOIN ' . $this->prefix . 'product_shop ps
-                ON (cp.id_product = ps.id_product AND ps.id_shop = ' . $this->idShop . ')
-            WHERE cp.id_cart IN (' . $cartIdsList . ')';
-
-        $rows = $this->safeQuery($sql, 'cart_line_items');
-        $map = [];
-
-        if (is_array($rows)) {
-            foreach ($rows as $row) {
-                $cid = (int) $row['id_cart'];
-                $pid = (int) $row['id_product'];
-                $aid = (int) $row['id_product_attribute'];
-                $qty = min(max(1, (int) $row['quantity']), 2147483647);
-                $price = (float) $row['unit_price'];
-                $total = $price * $qty;
-
-                $map[$cid][] = [
-                    'product_id' => $pid,
-                    'variation_id' => $aid > 0 ? $pid . '_' . $aid : null,
-                    'product_name' => (string) ($row['product_name'] ?? ''),
-                    'quantity' => $qty,
-                    'price' => (string) round($price, 2),
-                    'total' => (string) round($total, 2),
-                    'sku' => (string) ($row['sku'] ?? ''),
-                    'image_url' => null,
-                ];
-            }
-        }
-
-        return $map;
-    }
-
-    private function batchLoadCartCouponCodes($cartIdsList)
-    {
-        $sql = 'SELECT ccr.id_cart, cr.code
-            FROM ' . $this->prefix . 'cart_cart_rule ccr
-            LEFT JOIN ' . $this->prefix . 'cart_rule cr ON (ccr.id_cart_rule = cr.id_cart_rule)
-            WHERE ccr.id_cart IN (' . $cartIdsList . ')
-            AND cr.code IS NOT NULL AND cr.code != \'\'';
-
-        $rows = $this->safeQuery($sql, 'cart_coupon_codes');
-        $map = [];
-
-        if (is_array($rows)) {
-            foreach ($rows as $row) {
-                $cid = (int) $row['id_cart'];
-                $map[$cid][] = (string) $row['code'];
-            }
-        }
-
-        return $map;
     }
 
 

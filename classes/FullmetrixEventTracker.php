@@ -435,6 +435,24 @@ class FullmetrixEventTracker
             return;
         }
 
+        // Get phone from customer's default address
+        $phone = null;
+        if ($customer->id) {
+            $addresses = $customer->getAddresses(Context::getContext()->language->id);
+            if (!empty($addresses)) {
+                foreach ($addresses as $address) {
+                    if (!empty($address['phone_mobile'])) {
+                        $phone = $address['phone_mobile'];
+                        break;
+                    }
+                    if (!empty($address['phone'])) {
+                        $phone = $address['phone'];
+                        break;
+                    }
+                }
+            }
+        }
+
         $event = array(
             'event_id' => self::generateUuid(),
             'event_type' => 'identify',
@@ -443,6 +461,7 @@ class FullmetrixEventTracker
             'contact_id' => self::getContactId(),
             'properties' => array(
                 'email' => $customer->email,
+                'phone' => $phone,
                 'first_name' => $customer->firstname,
                 'last_name' => $customer->lastname,
                 'customer_id' => $customer->id,
@@ -470,14 +489,14 @@ class FullmetrixEventTracker
             'events' => array($event),
             'visitor_id' => $event['visitor_id'],
             'session_id' => $event['session_id'],
-            'contact_id' => $event['contact_id'],
+            'source' => 'prestashop',
             'plugin_version' => FullmetrixConnector::FULLMETRIX_VERSION,
         ));
 
         $timestamp = round(microtime(true) * 1000);
         $signature = hash_hmac('sha256', $timestamp . '.' . $payload, $secret);
 
-        $url = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/events';
+        $url = FullmetrixConnector::getApiBase() . '/../webhooks/events';
 
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_POST, true);

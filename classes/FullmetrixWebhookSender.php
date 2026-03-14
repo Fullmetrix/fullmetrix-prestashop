@@ -75,7 +75,7 @@ class FullmetrixWebhookSender
         }
 
         $exporter = new FullmetrixStreamExporter();
-        $apiUrl = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/ecommerce';
+        $apiUrl = FullmetrixConnector::getApiBase() . '/../webhooks/ecommerce';
 
         // Build summary for logging
         $webhookSummary = [];

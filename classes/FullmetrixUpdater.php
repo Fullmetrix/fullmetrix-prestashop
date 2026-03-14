@@ -24,7 +24,7 @@ class FullmetrixUpdater
             }
         }
 
-        $url = FullmetrixConnector::FULLMETRIX_API_BASE . '/check-update?'
+        $url = FullmetrixConnector::getApiBase() . '/check-update?'
             . http_build_query([
                 'connectionCode' => $code,
                 'currentVersion' => FullmetrixConnector::FULLMETRIX_VERSION,

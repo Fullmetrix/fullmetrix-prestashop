@@ -93,11 +93,8 @@ class FullmetrixConnectorEventsModuleFrontController extends ModuleFrontControll
             $event['session_id'] = FullmetrixEventTracker::getSessionId();
         }
 
-        // Add contact from cookie if available
-        $contact = FullmetrixEventTracker::getContactId();
-        if ($contact && empty($event['contact_id'])) {
-            $event['contact_id'] = $contact;
-        }
+        // Note: contact_id is resolved server-side by the API from event.contact.email
+        // The raw cookie value is base64 JSON, not a valid UUID, so we don't send it
 
         // Enrich product data if product_id is present
         if (isset($event['properties']['product_id']) && empty($event['properties']['product'])) {
@@ -136,12 +133,35 @@ class FullmetrixConnectorEventsModuleFrontController extends ModuleFrontControll
             return false;
         }
 
-        // Build payload
+        // Build session_metadata from event data
+        $session_metadata = [];
+        $first_event = $events[0];
+        if (isset($first_event['utm'])) {
+            $session_metadata = array_merge($session_metadata, $first_event['utm']);
+        }
+        if (isset($first_event['device']['type'])) {
+            $session_metadata['device_type'] = $first_event['device']['type'];
+        }
+        if (isset($first_event['device']['screen'])) {
+            $parts = explode('x', $first_event['device']['screen']);
+            if (count($parts) === 2) {
+                $session_metadata['screen_width'] = (int) $parts[0];
+                $session_metadata['screen_height'] = (int) $parts[1];
+            }
+        }
+        if (!empty($first_event['page']['referrer'])) {
+            $session_metadata['referrer'] = $first_event['page']['referrer'];
+        }
+        if (isset($first_event['properties']['referrer_type'])) {
+            $session_metadata['referrer_type'] = $first_event['properties']['referrer_type'];
+        }
+
+        // Build payload (contact_id resolved server-side by API from event data, not from cookie)
         $payload = json_encode([
             'events' => $events,
             'visitor_id' => $events[0]['visitor_id'] ?? FullmetrixEventTracker::getVisitorId(),
             'session_id' => $events[0]['session_id'] ?? FullmetrixEventTracker::getSessionId(),
-            'contact_id' => $events[0]['contact_id'] ?? null,
+            'session_metadata' => !empty($session_metadata) ? $session_metadata : null,
             'source' => 'prestashop',
             'plugin_version' => FullmetrixConnector::FULLMETRIX_VERSION,
             'site_url' => Tools::getShopDomainSsl(true),
@@ -155,7 +175,7 @@ class FullmetrixConnectorEventsModuleFrontController extends ModuleFrontControll
         $timestamp = round(microtime(true) * 1000);
         $signature = hash_hmac('sha256', $timestamp . '.' . $payload, $secret);
 
-        $url = FullmetrixConnector::FULLMETRIX_API_BASE . '/../webhooks/events';
+        $url = FullmetrixConnector::getApiBase() . '/../webhooks/events';
 
         // Send with cURL (non-blocking for performance)
         $ch = curl_init($url);
@@ -171,7 +191,7 @@ class FullmetrixConnectorEventsModuleFrontController extends ModuleFrontControll
                 'X-Fullmetrix-Signature: ' . $signature,
                 'X-Fullmetrix-Timestamp: ' . $timestamp,
             ],
-            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYPEER => strpos($url, 'https://') === 0,
         ]);
 
         $result = curl_exec($ch);
