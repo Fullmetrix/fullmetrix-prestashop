@@ -1,5 +1,5 @@
 {
-  "version": "4.1.0",
-  "minimumRequired": "3.0.0",
-  "changelog": "Added: Complete behavioral tracking system (page views, product views, add to cart, checkout, orders). Added: Contact identification with 2-year cookies. Added: Instant event sending with retry mechanism."
+  "version": "0.1.0",
+  "minimumRequired": "0.1.0",
+  "changelog": "Initial release: Behavioral tracking, contact identification, event streaming, auto-update system."
 }
