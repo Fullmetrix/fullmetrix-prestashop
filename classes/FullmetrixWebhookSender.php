@@ -123,8 +123,12 @@ class FullmetrixWebhookSender
                 ],
             ]);
 
-            // Fire-and-forget — ignore result
-            @file_get_contents($apiUrl, false, $context);
+            // Send with 1 retry on failure
+            $result = @file_get_contents($apiUrl, false, $context);
+            if ($result === false) {
+                usleep(500000); // 500ms backoff
+                @file_get_contents($apiUrl, false, $context);
+            }
         }
 
         self::$queue = [];

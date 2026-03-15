@@ -47,6 +47,7 @@ class FullmetrixConnector extends Module
         return parent::install()
             && $this->registerHook('displayBackOfficeHeader')
             && $this->registerHook('displayHeader')
+            && $this->registerHook('displayFooter')
             // Webhook hooks
             && $this->registerHook('actionValidateOrder')
             && $this->registerHook('actionOrderStatusUpdate')
@@ -134,6 +135,108 @@ window.fm_config = ' . json_encode(array(
             $this->context->controller->addJS(
                 $this->_path . 'views/js/fullmetrix-tracker.js'
             );
+        }
+
+        return $output;
+    }
+
+    /**
+     * Get cached plugin config from Fullmetrix API (cached 5 min)
+     */
+    private function getCachedConfig()
+    {
+        $cacheKey = 'fullmetrix_plugin_config';
+        $cached = Configuration::get($cacheKey);
+        if ($cached) {
+            $data = json_decode($cached, true);
+            if (is_array($data) && isset($data['_ts']) && (time() - $data['_ts']) < 300) {
+                return $data;
+            }
+        }
+
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        if (empty($secret) || empty($code)) {
+            return null;
+        }
+
+        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
+        if (empty($apiBase)) {
+            $apiBase = 'https://fullmetrix.com/api/plugin';
+        }
+
+        $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, '');
+
+        $ch = curl_init($apiBase . '/config');
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 5,
+            CURLOPT_HTTPHEADER => array(
+                'X-Fullmetrix-Connection-Code: ' . $headers['X-Fullmetrix-Connection-Code'],
+                'X-Fullmetrix-Signature: ' . $headers['X-Fullmetrix-Signature'],
+                'X-Fullmetrix-Timestamp: ' . $headers['X-Fullmetrix-Timestamp'],
+                'X-Fullmetrix-Plugin-Version: ' . self::FULLMETRIX_VERSION,
+            ),
+        ));
+        $body = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode !== 200 || empty($body)) {
+            return null;
+        }
+
+        $config = json_decode($body, true);
+        if (!is_array($config)) {
+            return null;
+        }
+
+        $config['_ts'] = time();
+        Configuration::updateValue($cacheKey, json_encode($config), false, 0, 0);
+
+        return $config;
+    }
+
+    public function hookDisplayFooter()
+    {
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        $registered = Configuration::get('FULLMETRIX_REGISTERED');
+
+        if (empty($secret) || empty($code) || !$registered) {
+            return '';
+        }
+
+        $config = $this->getCachedConfig();
+        if (!$config) {
+            return '';
+        }
+
+        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
+        if (empty($apiBase)) {
+            $apiBase = 'https://fullmetrix.com/api/plugin';
+        }
+        $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
+        $output = '';
+
+        // Inject active form scripts
+        if (!empty($config['activeForms']) && is_array($config['activeForms'])) {
+            foreach ($config['activeForms'] as $form) {
+                $id = Tools::safeOutput($form['id']);
+                $token = Tools::safeOutput($form['publicToken']);
+                $output .= '<script src="' . Tools::safeOutput($origin) . '/forms/fullmetrix-forms.js" data-form-id="' . $id . '" data-token="' . $token . '" defer></script>' . "\n";
+            }
+        }
+
+        // Inject WhatsApp widget
+        if (!empty($config['whatsappWidget']['enabled'])) {
+            $w = $config['whatsappWidget'];
+            $output .= '<script src="' . Tools::safeOutput($origin) . '/widgets/fullmetrix-widget.js"'
+                . ' data-phone="' . Tools::safeOutput($w['phoneNumber'] ?? '') . '"'
+                . ' data-message="' . Tools::safeOutput($w['welcomeMessage'] ?? '') . '"'
+                . ' data-position="' . Tools::safeOutput($w['position'] ?? 'right') . '"'
+                . ' data-color="' . Tools::safeOutput($w['color'] ?? '#25D366') . '"'
+                . ' defer></script>' . "\n";
         }
 
         return $output;

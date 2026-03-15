@@ -10,11 +10,13 @@ class FullmetrixStreamExporter
     private $prefix;
     private $idLang;
     private $idShop;
-    private $batchSize = 500;
+    private $batchSize = 1000;
     private $memoryLimitBytes;
     private $currencyCache = [];
     private $countryCache = [];
     private $stateCache = [];
+    private $orderColumnsCache = null;
+    private $cartRuleColumnsCache = null;
 
     public function __construct()
     {
@@ -194,8 +196,11 @@ class FullmetrixStreamExporter
             $sinceWhere = " AND o.date_upd > '" . pSQL($since) . "'";
         }
 
-        // Detect available optional columns on first iteration
-        $optionalCols = $this->detectOrderColumns();
+        // Detect available optional columns once per sync (cached)
+        if ($this->orderColumnsCache === null) {
+            $this->orderColumnsCache = $this->detectOrderColumns();
+        }
+        $optionalCols = $this->orderColumnsCache;
 
         do {
             $noteCol = $optionalCols['note'] ? ', o.note' : ", '' AS note";
@@ -230,7 +235,7 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'orders');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('orders', 'id_order', $lastId, $sinceWhere);
                 continue;
             }
             if (empty($rows)) {
@@ -474,7 +479,10 @@ class FullmetrixStreamExporter
 
     private function batchLoadOrderCartRules($orderIdsList)
     {
-        $hasValueTaxIncl = $this->detectOrderCartRuleColumns();
+        if ($this->cartRuleColumnsCache === null) {
+            $this->cartRuleColumnsCache = $this->detectOrderCartRuleColumns();
+        }
+        $hasValueTaxIncl = $this->cartRuleColumnsCache;
         $valueSel = $hasValueTaxIncl ? 'ocr.value_tax_incl' : 'ocr.value';
 
         $sql = 'SELECT ocr.id_order, ocr.id_cart_rule, ocr.name, cr.code AS coupon_code, ' . $valueSel . ' AS discount_value
@@ -554,7 +562,7 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'refunds');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('order_slip', 'id_order_slip', $lastId, $sinceWhere);
                 continue;
             }
             if (empty($rows)) {
@@ -658,7 +666,7 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'customers');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('customer', 'id_customer', $lastId, str_replace('c.date_upd', 'date_upd', $sinceWhere));
                 continue;
             }
             if (empty($rows)) {
@@ -832,7 +840,7 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'products');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('product', 'id_product', $lastId, str_replace('p.date_upd', 'date_upd', $sinceWhere));
                 continue;
             }
             if (empty($rows)) {
@@ -841,17 +849,19 @@ class FullmetrixStreamExporter
 
             $productIds = [];
             $basePrices = [];
+            $rewriteMap = [];
             foreach ($rows as $row) {
                 $pid = (int) $row['id_product'];
                 $productIds[] = $pid;
                 $basePrices[$pid] = (float) $row['price'];
+                $rewriteMap[$pid] = (string) ($row['link_rewrite'] ?? 'product');
             }
             $productIdsList = implode(',', $productIds);
 
             // Batch queries
             $categoriesMap = $this->batchLoadProductCategories($productIdsList);
             $tagsMap = $this->batchLoadProductTags($productIdsList);
-            $imagesMap = $this->batchLoadProductImages($productIdsList);
+            $imagesMap = $this->batchLoadProductImages($productIdsList, $rewriteMap);
             $salePriceMap = $this->batchLoadSpecificPrices($productIdsList, $basePrices);
             $combosMap = $this->batchLoadCombinations($productIdsList);
 
@@ -1002,7 +1012,7 @@ class FullmetrixStreamExporter
         return $map;
     }
 
-    private function batchLoadProductImages($productIdsList)
+    private function batchLoadProductImages($productIdsList, $rewriteMap = [])
     {
         $sql = 'SELECT i.id_product, i.id_image, i.cover
             FROM ' . $this->prefix . 'image i
@@ -1020,19 +1030,6 @@ class FullmetrixStreamExporter
 
         // Build image URLs
         $link = Context::getContext()->link;
-
-        // Get link_rewrite per product for image URLs
-        $rewriteMap = [];
-        $rewriteSql = 'SELECT id_product, link_rewrite
-            FROM ' . $this->prefix . 'product_lang
-            WHERE id_product IN (' . $productIdsList . ')
-            AND id_lang = ' . $this->idLang . ' AND id_shop = ' . $this->idShop;
-        $rewriteRows = $this->safeQuery($rewriteSql, 'product_rewrites');
-        if (is_array($rewriteRows)) {
-            foreach ($rewriteRows as $r) {
-                $rewriteMap[(int) $r['id_product']] = (string) $r['link_rewrite'];
-            }
-        }
 
         foreach ($rows as $row) {
             $pid = (int) $row['id_product'];
@@ -1136,9 +1133,7 @@ class FullmetrixStreamExporter
         do {
             $sql = 'SELECT c.id_category, c.id_parent, c.active, c.level_depth,
                        c.date_add, c.date_upd,
-                       cl.name, cl.description, cl.link_rewrite,
-                       (SELECT COUNT(*) FROM ' . $this->prefix . 'category_product cp
-                        WHERE cp.id_category = c.id_category) AS product_count
+                       cl.name, cl.description, cl.link_rewrite
                 FROM ' . $this->prefix . 'category c
                 LEFT JOIN ' . $this->prefix . 'category_lang cl
                     ON (c.id_category = cl.id_category AND cl.id_lang = ' . $this->idLang . ' AND cl.id_shop = ' . $this->idShop . ')
@@ -1149,23 +1144,38 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'categories');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('category', 'id_category', $lastId, str_replace('c.date_upd', 'date_upd', $sinceWhere));
                 continue;
             }
             if (empty($rows)) {
                 break;
             }
 
+            // Batch load product counts instead of N+1 subquery
+            $catIds = array_map(function ($r) { return (int) $r['id_category']; }, $rows);
+            $catIdsList = implode(',', $catIds);
+            $countMap = [];
+            $countRows = $this->safeQuery(
+                'SELECT id_category, COUNT(*) AS cnt FROM ' . $this->prefix . 'category_product WHERE id_category IN (' . $catIdsList . ') GROUP BY id_category',
+                'category_counts'
+            );
+            if (is_array($countRows)) {
+                foreach ($countRows as $cr) {
+                    $countMap[(int) $cr['id_category']] = (int) $cr['cnt'];
+                }
+            }
+
             foreach ($rows as $row) {
+                $cid = (int) $row['id_category'];
                 $this->sendLine([
                     'type' => 'category',
                     'data' => [
-                        'id' => (int) $row['id_category'],
+                        'id' => $cid,
                         'name' => (string) ($row['name'] ?? ''),
                         'slug' => (string) ($row['link_rewrite'] ?? ''),
                         'parent_id' => (int) $row['id_parent'] ?: null,
                         'description' => (string) ($row['description'] ?? ''),
-                        'count' => (int) ($row['product_count'] ?? 0),
+                        'count' => $countMap[$cid] ?? 0,
                         'image_url' => null,
                     ],
                 ]);
@@ -1204,9 +1214,7 @@ class FullmetrixStreamExporter
                        cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
                        cr.minimum_amount, cr.minimum_amount_currency,
                        cr.date_from, cr.date_to, cr.date_add,
-                       crl.name,
-                       (SELECT COUNT(DISTINCT ocr.id_order) FROM ' . $this->prefix . 'order_cart_rule ocr
-                        WHERE ocr.id_cart_rule = cr.id_cart_rule) AS usage_count
+                       crl.name
                 FROM ' . $this->prefix . 'cart_rule cr
                 LEFT JOIN ' . $this->prefix . 'cart_rule_lang crl
                     ON (cr.id_cart_rule = crl.id_cart_rule AND crl.id_lang = ' . $this->idLang . ')
@@ -1217,14 +1225,29 @@ class FullmetrixStreamExporter
             $rows = $this->safeQuery($sql, 'coupons');
 
             if ($rows === false) {
-                $lastId += $this->batchSize;
+                $lastId = $this->findNextId('cart_rule', 'id_cart_rule', $lastId, str_replace('cr.date_add', 'date_add', $sinceWhere));
                 continue;
             }
             if (empty($rows)) {
                 break;
             }
 
+            // Batch load usage counts instead of N+1 subquery
+            $crIds = array_map(function ($r) { return (int) $r['id_cart_rule']; }, $rows);
+            $crIdsList = implode(',', $crIds);
+            $usageMap = [];
+            $usageRows = $this->safeQuery(
+                'SELECT id_cart_rule, COUNT(DISTINCT id_order) AS cnt FROM ' . $this->prefix . 'order_cart_rule WHERE id_cart_rule IN (' . $crIdsList . ') GROUP BY id_cart_rule',
+                'coupon_usage_counts'
+            );
+            if (is_array($usageRows)) {
+                foreach ($usageRows as $ur) {
+                    $usageMap[(int) $ur['id_cart_rule']] = (int) $ur['cnt'];
+                }
+            }
+
             foreach ($rows as $row) {
+                $crId = (int) $row['id_cart_rule'];
                 $discountType = 'fixed_cart';
                 $amount = (float) $row['reduction_amount'];
                 if ((float) $row['reduction_percent'] > 0) {
@@ -1235,12 +1258,12 @@ class FullmetrixStreamExporter
                 $this->sendLine([
                     'type' => 'coupon',
                     'data' => [
-                        'id' => (int) $row['id_cart_rule'],
+                        'id' => $crId,
                         'code' => (string) ($row['code'] ?? ''),
                         'description' => (string) ($row['description'] ?? ''),
                         'discount_type' => $discountType,
                         'amount' => (string) $amount,
-                        'usage_count' => (int) ($row['usage_count'] ?? 0),
+                        'usage_count' => $usageMap[$crId] ?? 0,
                         'usage_limit' => (int) ($row['quantity'] ?? 0),
                         'usage_limit_per_user' => (int) ($row['quantity_per_user'] ?? 0),
                         'free_shipping' => (bool) $row['free_shipping'],
@@ -1295,32 +1318,64 @@ class FullmetrixStreamExporter
         }
     }
 
-    private function safeQuery($sql, $context = '')
+    private function safeQuery($sql, $context = '', $retries = 2)
     {
-        try {
-            $rows = $this->db->executeS($sql);
-        } catch (\Throwable $e) {
-            $this->sendLine([
-                'type' => 'error',
-                'message' => 'SQL exception' . ($context ? " [$context]" : '') . ': ' . $e->getMessage(),
-            ]);
-            return false;
+        for ($attempt = 0; $attempt <= $retries; $attempt++) {
+            try {
+                $rows = $this->db->executeS($sql);
+            } catch (\Throwable $e) {
+                if ($attempt < $retries) {
+                    usleep(200000 * ($attempt + 1)); // 200ms, 400ms
+                    continue;
+                }
+                $this->sendLine([
+                    'type' => 'error',
+                    'message' => 'SQL exception' . ($context ? " [$context]" : '') . ': ' . $e->getMessage(),
+                    'attempt' => $attempt + 1,
+                ]);
+                return false;
+            }
+            if ($rows === false) {
+                if ($attempt < $retries) {
+                    usleep(200000 * ($attempt + 1));
+                    continue;
+                }
+                $error = method_exists($this->db, 'getMsgError') ? $this->db->getMsgError() : 'Unknown SQL error';
+                $this->sendLine([
+                    'type' => 'error',
+                    'message' => 'SQL error' . ($context ? " [$context]" : '') . ': ' . $error,
+                    'attempt' => $attempt + 1,
+                ]);
+                return false;
+            }
+            return is_array($rows) ? $rows : [];
         }
-        if ($rows === false) {
-            $error = method_exists($this->db, 'getMsgError') ? $this->db->getMsgError() : 'Unknown SQL error';
-            $this->sendLine([
-                'type' => 'error',
-                'message' => 'SQL error' . ($context ? " [$context]" : '') . ': ' . $error,
-            ]);
-            return false;
-        }
-        return is_array($rows) ? $rows : [];
+        return false;
     }
 
     private function sendLine($data)
     {
         echo json_encode($data, JSON_UNESCAPED_UNICODE) . "\n";
         flush();
+    }
+
+    /**
+     * Find the next valid ID after a failed query to avoid skipping data.
+     * Uses a lightweight MIN() query instead of blind $lastId += batchSize.
+     */
+    private function findNextId($table, $idColumn, $afterId, $extraWhere = '')
+    {
+        $sql = 'SELECT MIN(' . $idColumn . ') AS next_id FROM ' . $this->prefix . $table
+            . ' WHERE ' . $idColumn . ' > ' . (int) $afterId . $extraWhere;
+        try {
+            $row = $this->db->getRow($sql);
+            if ($row && $row['next_id'] !== null) {
+                return (int) $row['next_id'] - 1; // -1 because queries use > lastId
+            }
+        } catch (\Throwable $e) {
+            // fallback
+        }
+        return $afterId + $this->batchSize;
     }
 
     private $gcCounter = 0;
@@ -1351,8 +1406,8 @@ class FullmetrixStreamExporter
         $memPct = memory_get_usage(true) / $this->memoryLimitBytes;
         if ($memPct > 0.7 && $this->batchSize > 100) {
             $this->batchSize = max(100, (int) ($this->batchSize * 0.5));
-        } elseif ($memPct < 0.4 && $this->batchSize < 1000) {
-            $this->batchSize = min(1000, (int) ($this->batchSize * 1.5));
+        } elseif ($memPct < 0.4 && $this->batchSize < 2000) {
+            $this->batchSize = min(2000, (int) ($this->batchSize * 1.5));
         }
     }
 
@@ -1622,9 +1677,10 @@ class FullmetrixStreamExporter
     {
         $sql = 'SELECT c.id_category, c.id_parent, c.active, c.date_add, c.date_upd,
                    cl.name, cl.description, cl.link_rewrite,
-                   (SELECT COUNT(*) FROM ' . $this->prefix . 'category_product cp
-                    WHERE cp.id_category = c.id_category) AS product_count
+                   COALESCE(cp_count.cnt, 0) AS product_count
             FROM ' . $this->prefix . 'category c
+            LEFT JOIN (SELECT id_category, COUNT(*) AS cnt FROM ' . $this->prefix . 'category_product GROUP BY id_category) cp_count
+                ON cp_count.id_category = c.id_category
             LEFT JOIN ' . $this->prefix . 'category_lang cl
                 ON (c.id_category = cl.id_category AND cl.id_lang = ' . $this->idLang . ' AND cl.id_shop = ' . $this->idShop . ')
             WHERE c.id_category = ' . $categoryId;
@@ -1654,9 +1710,10 @@ class FullmetrixStreamExporter
                    cr.minimum_amount, cr.minimum_amount_currency,
                    cr.date_from, cr.date_to, cr.date_add,
                    crl.name,
-                   (SELECT COUNT(DISTINCT ocr.id_order) FROM ' . $this->prefix . 'order_cart_rule ocr
-                    WHERE ocr.id_cart_rule = cr.id_cart_rule) AS usage_count
+                   COALESCE(ocr_count.cnt, 0) AS usage_count
             FROM ' . $this->prefix . 'cart_rule cr
+            LEFT JOIN (SELECT id_cart_rule, COUNT(DISTINCT id_order) AS cnt FROM ' . $this->prefix . 'order_cart_rule GROUP BY id_cart_rule) ocr_count
+                ON ocr_count.id_cart_rule = cr.id_cart_rule
             LEFT JOIN ' . $this->prefix . 'cart_rule_lang crl
                 ON (cr.id_cart_rule = crl.id_cart_rule AND crl.id_lang = ' . $this->idLang . ')
             WHERE cr.id_cart_rule = ' . $cartRuleId;
