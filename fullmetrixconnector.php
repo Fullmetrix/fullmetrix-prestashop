@@ -77,6 +77,7 @@ class FullmetrixConnector extends Module
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_CODE')
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_SECRET')
             && Configuration::deleteByName('FULLMETRIX_REGISTERED')
+            && Configuration::deleteByName('FULLMETRIX_WEBHOOKS_ENABLED')
             && Configuration::deleteByName('FULLMETRIX_LAST_SYNC')
             && Configuration::deleteByName('FULLMETRIX_EXPORT_COUNT')
             && Configuration::deleteByName('FULLMETRIX_SYNC_IN_PROGRESS')
@@ -303,6 +304,7 @@ window.fm_config = ' . json_encode(array(
             Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '');
             Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '');
             Configuration::updateValue('FULLMETRIX_REGISTERED', false);
+            Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', false);
             Configuration::updateValue('FULLMETRIX_LAST_SYNC', '');
             Configuration::updateValue('FULLMETRIX_EXPORT_COUNT', 0);
             Configuration::updateValue('FULLMETRIX_SYNC_IN_PROGRESS', '');
@@ -707,6 +709,7 @@ window.fm_config = ' . json_encode(array(
         }
 
         Configuration::updateValue('FULLMETRIX_REGISTERED', true);
+        Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', true);
 
         return true;
     }
