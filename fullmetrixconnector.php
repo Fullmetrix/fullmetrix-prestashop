@@ -228,17 +228,6 @@ window.fm_config = ' . json_encode(array(
             }
         }
 
-        // Inject WhatsApp widget
-        if (!empty($config['whatsappWidget']['enabled'])) {
-            $w = $config['whatsappWidget'];
-            $output .= '<script src="' . Tools::safeOutput($origin) . '/widgets/fullmetrix-widget.js"'
-                . ' data-phone="' . Tools::safeOutput($w['phoneNumber'] ?? '') . '"'
-                . ' data-message="' . Tools::safeOutput($w['welcomeMessage'] ?? '') . '"'
-                . ' data-position="' . Tools::safeOutput($w['position'] ?? 'right') . '"'
-                . ' data-color="' . Tools::safeOutput($w['color'] ?? '#25D366') . '"'
-                . ' defer></script>' . "\n";
-        }
-
         return $output;
     }
 
