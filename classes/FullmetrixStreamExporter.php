@@ -59,7 +59,6 @@ class FullmetrixStreamExporter
         return str_replace(' ', 'T', $d) . 'Z';
     }
 
-
     public function streamEntity($entity, $syncType = 'full', $since = null)
     {
         $this->setupStream();
@@ -183,7 +182,6 @@ class FullmetrixStreamExporter
         exit;
     }
 
-
     private function setupStream()
     {
         @set_time_limit(0);
@@ -208,7 +206,6 @@ class FullmetrixStreamExporter
     {
         // No-op — kept for forward compatibility
     }
-
 
     private function detectOrderColumns()
     {
@@ -583,7 +580,6 @@ class FullmetrixStreamExporter
         return $map;
     }
 
-
     private function streamRefundsFast($syncType = 'full', $since = null)
     {
         $count = 0;
@@ -682,7 +678,6 @@ class FullmetrixStreamExporter
 
         return $map;
     }
-
 
     private function streamCustomersFast($syncType = 'full', $since = null)
     {
@@ -851,7 +846,6 @@ class FullmetrixStreamExporter
 
         return $map;
     }
-
 
     private function streamProductsFast($syncType = 'full', $since = null)
     {
@@ -1164,7 +1158,6 @@ class FullmetrixStreamExporter
         return $map;
     }
 
-
     private function streamCategoriesFast($syncType = 'full', $since = null)
     {
         $count = 0;
@@ -1241,7 +1234,6 @@ class FullmetrixStreamExporter
 
         return $count;
     }
-
 
     private function streamCouponsFast($syncType = 'full', $since = null)
     {
@@ -1337,7 +1329,6 @@ class FullmetrixStreamExporter
         return $count;
     }
 
-
     private function getStoreUrl()
     {
         try {
@@ -1358,6 +1349,7 @@ class FullmetrixStreamExporter
 
     private function safeQuery($sql, $context = '', $retries = 2)
     {
+
         for ($attempt = 0; $attempt <= $retries; $attempt++) {
             try {
                 $rows = $this->db->executeS($sql);

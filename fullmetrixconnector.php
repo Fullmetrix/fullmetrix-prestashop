@@ -93,12 +93,6 @@ class FullmetrixConnector extends Module
     {
     }
 
-    public function hookDisplayHeader()
-    {
-        // Header hook - reserved for future use
-        return '';
-    }
-
     /**
      * Get cached plugin config from Fullmetrix API (cached 5 min)
      */
@@ -154,6 +148,24 @@ class FullmetrixConnector extends Module
         Configuration::updateValue($cacheKey, json_encode($config), false, 0, 0);
 
         return $config;
+    }
+
+    public function hookDisplayHeader()
+    {
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        $registered = Configuration::get('FULLMETRIX_REGISTERED');
+
+        if (empty($code) || !$registered) {
+            return '';
+        }
+
+        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
+        if (empty($apiBase)) {
+            $apiBase = 'https://fullmetrix.com/api/plugin';
+        }
+        $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
+
+        return '<script async src="' . Tools::safeOutput($origin) . '/t.js" data-key="' . Tools::safeOutput($code) . '"></script>' . "\n";
     }
 
     public function hookDisplayFooter()
