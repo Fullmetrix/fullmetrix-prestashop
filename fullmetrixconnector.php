@@ -290,8 +290,22 @@ class FullmetrixConnector extends Module
             }
         }
 
+        // Inject WhatsApp widget
+        $whatsappWidget = null;
+        if (!empty($config['whatsappWidget']['enabled'])) {
+            $w = $config['whatsappWidget'];
+            $whatsappWidget = [
+                'origin' => $origin,
+                'phoneNumber' => $w['phoneNumber'] ?? '',
+                'welcomeMessage' => $w['welcomeMessage'] ?? '',
+                'position' => $w['position'] ?? 'right',
+                'color' => $w['color'] ?? '#25D366',
+            ];
+        }
+
         $this->context->smarty->assign([
             'forms' => $forms,
+            'whatsappWidget' => $whatsappWidget,
         ]);
 
         return $this->display(__FILE__, 'views/templates/hook/footer.tpl');

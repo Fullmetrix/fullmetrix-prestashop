@@ -10,3 +10,6 @@
         <script src="{$form.origin|escape:'htmlall':'UTF-8'}/forms/fullmetrix-forms.js" data-form-id="{$form.id|escape:'htmlall':'UTF-8'}" data-token="{$form.token|escape:'htmlall':'UTF-8'}" defer></script>
     {/foreach}
 {/if}
+{if isset($whatsappWidget) && $whatsappWidget}
+    <script src="{$whatsappWidget.origin|escape:'htmlall':'UTF-8'}/widgets/fullmetrix-widget.js" data-phone="{$whatsappWidget.phoneNumber|escape:'htmlall':'UTF-8'}" data-message="{$whatsappWidget.welcomeMessage|escape:'htmlall':'UTF-8'}" data-position="{$whatsappWidget.position|escape:'htmlall':'UTF-8'}" data-color="{$whatsappWidget.color|escape:'htmlall':'UTF-8'}" defer></script>
+{/if}
