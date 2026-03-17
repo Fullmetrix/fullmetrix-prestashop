@@ -1,4 +1,11 @@
 <?php
+/**
+ * Fullmetrix - E-commerce analytics platform connector
+ *
+ * @author    Fullmetrix <contact@fullmetrix.com>
+ * @copyright 2024-2026 Fullmetrix
+ * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
+ */
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -7,14 +14,13 @@ if (!defined('_PS_VERSION_')) {
 require_once dirname(__FILE__) . '/classes/FullmetrixSecurity.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixFastExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixStreamExporter.php';
-require_once dirname(__FILE__) . '/classes/FullmetrixUpdater.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixWebhookSender.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '0.1.0';
+    const FULLMETRIX_VERSION = '1.0.0';
 
     public static function getApiBase()
     {
@@ -29,7 +35,7 @@ class FullmetrixConnector extends Module
         $this->version = self::FULLMETRIX_VERSION;
         $this->author = 'Fullmetrix';
         $this->need_instance = 0;
-        $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
+        $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => '8.99.99'];
         $this->bootstrap = true;
 
         parent::__construct();
@@ -82,8 +88,6 @@ class FullmetrixConnector extends Module
 
     public function hookDisplayBackOfficeHeader()
     {
-        // Trigger update check in background (cached 12h)
-        FullmetrixUpdater::checkForUpdate();
     }
 
     public function hookDisplayHeader()
@@ -270,7 +274,6 @@ class FullmetrixConnector extends Module
     public function getContent()
     {
         $output = '';
-        $output .= FullmetrixUpdater::getUpdateNotice();
 
         if (Tools::isSubmit('submitFullmetrixConnect')) {
             $connectionCode = Tools::getValue('FULLMETRIX_CONNECTION_CODE');
