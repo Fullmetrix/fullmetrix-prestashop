@@ -97,36 +97,44 @@ class FullmetrixConnector extends Module
      * Rebuild cart from recovery URL (?fm_cart=base64url payload).
      * Called via actionFrontControllerSetMedia hook or displayHeader.
      */
+    private static $cartRebuildDone = false;
+
     private function maybeRebuildCart()
     {
-        if (empty($_GET['fm_cart'])) {
+        if (self::$cartRebuildDone || empty($_GET['fm_cart'])) {
             return;
         }
+        self::$cartRebuildDone = true;
 
         $payload = Tools::getValue('fm_cart');
         $json = base64_decode(strtr($payload, '-_', '+/'));
-        if ($json === false) {
+        if (!is_string($json) || empty($json)) {
             return;
         }
 
         $data = json_decode($json, true);
-        if (!is_array($data) || empty($data['items'])) {
+        if (!is_array($data) || empty($data['items']) || !is_array($data['items'])) {
             return;
         }
 
         $context = Context::getContext();
+        if (!$context || !$context->language || !$context->currency) {
+            return;
+        }
+
         $cart = $context->cart;
-        if (!Validate::isLoadedObject($cart)) {
+        if (!$cart || !Validate::isLoadedObject($cart)) {
             $cart = new Cart();
             $cart->id_lang = (int) $context->language->id;
             $cart->id_currency = (int) $context->currency->id;
             if ($context->customer && $context->customer->id) {
                 $cart->id_customer = (int) $context->customer->id;
-                $cart->id_address_delivery = (int) Address::getFirstCustomerAddressId($context->customer->id);
+                $addressId = (int) Address::getFirstCustomerAddressId($context->customer->id);
+                $cart->id_address_delivery = $addressId > 0 ? $addressId : 0;
             }
             $cart->add();
             $context->cart = $cart;
-            $context->cookie->id_cart = (int) $cart->id;
+            $context->cookie->__set('id_cart', (int) $cart->id);
         }
 
         // Clear existing cart
@@ -143,7 +151,7 @@ class FullmetrixConnector extends Module
             $variationId = isset($item['v']) ? (int) $item['v'] : 0;
             $quantity = isset($item['q']) ? max(1, (int) $item['q']) : 1;
 
-            if ($productId > 0) {
+            if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
                 $cart->updateQty($quantity, $productId, $variationId);
             }
         }
@@ -152,6 +160,9 @@ class FullmetrixConnector extends Module
         if (!empty($data['c']) && is_array($data['c'])) {
             foreach ($data['c'] as $couponCode) {
                 $couponCode = pSQL(trim($couponCode));
+                if (!preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $couponCode)) {
+                    continue;
+                }
                 $cartRuleId = (int) CartRule::getIdByCode($couponCode);
                 if ($cartRuleId > 0) {
                     $cart->addCartRule($cartRuleId);
@@ -159,8 +170,9 @@ class FullmetrixConnector extends Module
             }
         }
 
-        // Redirect to cart
+        // Redirect to cart — Tools::redirect sends header, must exit explicitly
         Tools::redirect($context->link->getPageLink('cart', true, null, ['action' => 'show']));
+        exit;
     }
 
     /**
@@ -418,14 +430,22 @@ class FullmetrixConnector extends Module
             return $output;
         }
 
-        // Tabs for connected state
-        $this->context->smarty->assign([
-            'form_html' => $this->renderForm(),
-            'sync_html' => $this->renderSyncActivity(),
-            'logs_html' => $this->renderLogsTab(),
-        ]);
+        // Tabs for connected state — wrapper uses HelperForm output (already safe HTML)
+        $formHtml = $this->renderForm();
+        $syncHtml = $this->renderSyncActivity();
+        $logsHtml = $this->renderLogsTab();
 
-        $output .= $this->display(__FILE__, 'views/templates/admin/tabs.tpl');
+        $this->context->smarty->assign([
+            'connection_label' => $this->l('Connection'),
+            'logs_label' => $this->l('Logs'),
+        ]);
+        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_header.tpl');
+        $output .= $formHtml;
+        $output .= $syncHtml;
+        $this->context->smarty->assign(['is_logs_tab' => true]);
+        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_separator.tpl');
+        $output .= $logsHtml;
+        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_footer.tpl');
 
         return $output;
     }
