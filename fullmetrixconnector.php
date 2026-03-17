@@ -94,6 +94,76 @@ class FullmetrixConnector extends Module
     }
 
     /**
+     * Rebuild cart from recovery URL (?fm_cart=base64url payload).
+     * Called via actionFrontControllerSetMedia hook or displayHeader.
+     */
+    private function maybeRebuildCart()
+    {
+        if (empty($_GET['fm_cart'])) {
+            return;
+        }
+
+        $payload = Tools::getValue('fm_cart');
+        $json = base64_decode(strtr($payload, '-_', '+/'));
+        if ($json === false) {
+            return;
+        }
+
+        $data = json_decode($json, true);
+        if (!is_array($data) || empty($data['items'])) {
+            return;
+        }
+
+        $context = Context::getContext();
+        $cart = $context->cart;
+        if (!Validate::isLoadedObject($cart)) {
+            $cart = new Cart();
+            $cart->id_lang = (int) $context->language->id;
+            $cart->id_currency = (int) $context->currency->id;
+            if ($context->customer && $context->customer->id) {
+                $cart->id_customer = (int) $context->customer->id;
+                $cart->id_address_delivery = (int) Address::getFirstCustomerAddressId($context->customer->id);
+            }
+            $cart->add();
+            $context->cart = $cart;
+            $context->cookie->id_cart = (int) $cart->id;
+        }
+
+        // Clear existing cart
+        foreach ($cart->getProducts() as $product) {
+            $cart->deleteProduct(
+                (int) $product['id_product'],
+                (int) $product['id_product_attribute']
+            );
+        }
+
+        // Add items from recovery payload
+        foreach ($data['items'] as $item) {
+            $productId = isset($item['id']) ? (int) $item['id'] : 0;
+            $variationId = isset($item['v']) ? (int) $item['v'] : 0;
+            $quantity = isset($item['q']) ? max(1, (int) $item['q']) : 1;
+
+            if ($productId > 0) {
+                $cart->updateQty($quantity, $productId, $variationId);
+            }
+        }
+
+        // Apply coupons
+        if (!empty($data['c']) && is_array($data['c'])) {
+            foreach ($data['c'] as $couponCode) {
+                $couponCode = pSQL(trim($couponCode));
+                $cartRuleId = (int) CartRule::getIdByCode($couponCode);
+                if ($cartRuleId > 0) {
+                    $cart->addCartRule($cartRuleId);
+                }
+            }
+        }
+
+        // Redirect to cart
+        Tools::redirect($context->link->getPageLink('cart', true, null, ['action' => 'show']));
+    }
+
+    /**
      * Get cached plugin config from Fullmetrix API (cached 5 min)
      */
     private function getCachedConfig()
@@ -152,6 +222,9 @@ class FullmetrixConnector extends Module
 
     public function hookDisplayHeader()
     {
+        // Handle cart recovery URL
+        $this->maybeRebuildCart();
+
         $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
         $registered = Configuration::get('FULLMETRIX_REGISTERED');
 
@@ -165,7 +238,12 @@ class FullmetrixConnector extends Module
         }
         $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
 
-        return '<script async src="' . Tools::safeOutput($origin) . '/t.js" data-key="' . Tools::safeOutput($code) . '"></script>' . "\n";
+        $this->context->smarty->assign([
+            'origin' => $origin,
+            'code' => $code,
+        ]);
+
+        return $this->display(__FILE__, 'views/templates/hook/header.tpl');
     }
 
     public function hookDisplayFooter()
@@ -188,18 +266,23 @@ class FullmetrixConnector extends Module
             $apiBase = 'https://fullmetrix.com/api/plugin';
         }
         $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
-        $output = '';
 
-        // Inject active form scripts
+        $forms = [];
         if (!empty($config['activeForms']) && is_array($config['activeForms'])) {
             foreach ($config['activeForms'] as $form) {
-                $id = Tools::safeOutput($form['id']);
-                $token = Tools::safeOutput($form['publicToken']);
-                $output .= '<script src="' . Tools::safeOutput($origin) . '/forms/fullmetrix-forms.js" data-form-id="' . $id . '" data-token="' . $token . '" defer></script>' . "\n";
+                $forms[] = [
+                    'origin' => $origin,
+                    'id' => $form['id'],
+                    'token' => $form['publicToken'],
+                ];
             }
         }
 
-        return $output;
+        $this->context->smarty->assign([
+            'forms' => $forms,
+        ]);
+
+        return $this->display(__FILE__, 'views/templates/hook/footer.tpl');
     }
 
     // ─── Webhook hook handlers ────────────────────────────────────────
@@ -336,20 +419,13 @@ class FullmetrixConnector extends Module
         }
 
         // Tabs for connected state
-        $output .= '<ul class="nav nav-tabs" role="tablist">
-            <li class="active"><a href="#fullmetrix-tab-connection" data-toggle="tab">' . $this->l('Connection') . '</a></li>
-            <li><a href="#fullmetrix-tab-logs" data-toggle="tab">' . $this->l('Logs') . '</a></li>
-        </ul>';
+        $this->context->smarty->assign([
+            'form_html' => $this->renderForm(),
+            'sync_html' => $this->renderSyncActivity(),
+            'logs_html' => $this->renderLogsTab(),
+        ]);
 
-        $output .= '<div class="tab-content">';
-        $output .= '<div class="tab-pane active" id="fullmetrix-tab-connection">';
-        $output .= $this->renderForm();
-        $output .= $this->renderSyncActivity();
-        $output .= '</div>';
-        $output .= '<div class="tab-pane" id="fullmetrix-tab-logs">';
-        $output .= $this->renderLogsTab();
-        $output .= '</div>';
-        $output .= '</div>';
+        $output .= $this->display(__FILE__, 'views/templates/admin/tabs.tpl');
 
         return $output;
     }
@@ -480,155 +556,125 @@ class FullmetrixConnector extends Module
             }
         }
 
-        $html = '<div class="panel"><h3><i class="icon-refresh"></i> '
-            . $this->l('Sync activity') . '</h3>';
+        $syncInProgress = !empty($inProgress);
+        $syncElapsed = '';
+        $syncTypeLabel = '';
 
-        if ($inProgress) {
+        if ($syncInProgress) {
             $elapsed = time() - (int) ($inProgress['started_at'] ?? time());
-            $typeLabel = '';
+            $syncElapsed = $this->formatDuration($elapsed);
             if (isset($inProgress['type']) && $inProgress['type'] === 'bulk') {
-                $typeLabel = ' (full export)';
+                $syncTypeLabel = ' (full export)';
             }
-            $html .= '<div class="alert alert-info">'
-                . '<strong>' . $this->l('Sync in progress') . $typeLabel . '...</strong> '
-                . '(' . $this->formatDuration($elapsed) . ')'
-                . '</div>';
-            $html .= '<p class="text-muted">'
-                . $this->l('Fullmetrix is fetching your store data. Refresh this page to track progress.')
-                . '</p>';
-            $html .= '<script>setTimeout(function() { location.reload(); }, 10000);</script>';
-        } elseif ($lastSync && isset($lastSync['completed_at'])) {
-            $html .= '<div class="alert alert-success">'
-                . '<strong>' . $this->l('Last sync') . ':</strong> '
-                . $this->formatTimeAgo((int) $lastSync['completed_at']);
+        }
+
+        $lastSyncData = null;
+        $lastSyncTimeAgo = '';
+        $lastSyncMode = '';
+        $lastSyncEntities = [];
+
+        if (!$syncInProgress && $lastSync && isset($lastSync['completed_at'])) {
+            $lastSyncData = $lastSync;
+            $lastSyncTimeAgo = $this->formatTimeAgo((int) $lastSync['completed_at']);
 
             if (!empty($lastSync['type'])) {
-                $modeLabel = $lastSync['type'] === 'bulk'
+                $lastSyncMode = $lastSync['type'] === 'bulk'
                     ? $this->l('Full export')
                     : $this->l('Paginated export');
-                $html .= ' — ' . $modeLabel;
             }
-
-            $html .= '</div>';
 
             if (!empty($lastSync['entities']) && is_array($lastSync['entities'])) {
-                $html .= '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:15px;">';
                 foreach ($lastSync['entities'] as $label => $count) {
                     if ($count > 0) {
-                        $html .= '<div style="text-align:center;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:4px;padding:10px 16px;min-width:80px;">'
-                            . '<div style="font-size:20px;font-weight:700;color:#333;">' . number_format($count, 0, ',', ' ') . '</div>'
-                            . '<div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;">' . htmlspecialchars($label) . '</div>'
-                            . '</div>';
+                        $lastSyncEntities[] = [
+                            'label' => $label,
+                            'count_formatted' => number_format($count, 0, ',', ' '),
+                        ];
                     }
                 }
-                $html .= '</div>';
             }
-        } else {
-            $html .= '<div class="alert alert-warning">'
-                . $this->l('Waiting for first sync. Start a sync from your Fullmetrix dashboard.')
-                . '</div>';
         }
 
-        if ($exportCount > 0) {
-            $html .= '<p class="text-muted" style="margin:0;font-size:12px;">'
-                . sprintf($this->l('%s export requests processed in total'), number_format($exportCount, 0, ',', ' '))
-                . '</p>';
-        }
+        $this->context->smarty->assign([
+            'sync_in_progress' => $syncInProgress,
+            'sync_elapsed' => $syncElapsed,
+            'sync_type_label' => $syncTypeLabel,
+            'last_sync' => $lastSyncData,
+            'last_sync_time_ago' => $lastSyncTimeAgo,
+            'last_sync_mode' => $lastSyncMode,
+            'last_sync_entities' => $lastSyncEntities,
+            'export_count' => $exportCount,
+            'export_count_formatted' => number_format($exportCount, 0, ',', ' '),
+        ]);
 
-        $html .= '</div>';
-
-        return $html;
+        return $this->display(__FILE__, 'views/templates/admin/sync_activity.tpl');
     }
 
     protected function renderLogsTab()
     {
-        $logs = FullmetrixLogger::getLogs();
+        $rawLogs = FullmetrixLogger::getLogs();
         $inProgressRaw = Configuration::get('FULLMETRIX_SYNC_IN_PROGRESS');
         $inProgress = !empty($inProgressRaw) ? json_decode($inProgressRaw, true) : null;
 
         $adminUrl = $this->context->link->getAdminLink('AdminModules', true)
             . '&configure=' . $this->name . '&tab_module=' . $this->tab . '&module_name=' . $this->name;
 
-        $html = '<div class="panel">';
-        $html .= '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;">';
-        $html .= '<h3 style="margin:0;"><i class="icon-list-alt"></i> ' . $this->l('Activity log') . '</h3>';
+        $badgeColors = [
+            'registered' => '#27ae60',
+            'disconnected' => '#95a5a6',
+            'sync_start' => '#2980b9',
+            'sync_complete' => '#27ae60',
+            'sync_error' => '#e74c3c',
+            'webhook' => '#2980b9',
+        ];
 
-        if (!empty($logs)) {
-            $html .= '<form method="post" action="' . htmlspecialchars($adminUrl) . '" style="margin:0;">'
-                . '<button type="submit" name="submitFullmetrixClearLogs" class="btn btn-default btn-sm">'
-                . '<i class="icon-trash"></i> ' . $this->l('Clear logs')
-                . '</button></form>';
-        }
+        $typeLabels = [
+            'registered' => 'Connected',
+            'disconnected' => 'Disconnected',
+            'sync_start' => 'Sync',
+            'sync_complete' => 'Sync OK',
+            'sync_error' => 'Error',
+            'webhook' => 'Webhook',
+        ];
 
-        $html .= '</div>';
+        $logs = [];
+        foreach ($rawLogs as $log) {
+            $color = isset($badgeColors[$log['type']]) ? $badgeColors[$log['type']] : '#95a5a6';
+            $label = isset($typeLabels[$log['type']]) ? $typeLabels[$log['type']] : $log['type'];
 
-        if (empty($logs)) {
-            $html .= '<p class="text-muted">' . $this->l('No activity recorded.') . '</p>';
-        } else {
-            $badgeColors = [
-                'registered' => '#27ae60',
-                'disconnected' => '#95a5a6',
-                'sync_start' => '#2980b9',
-                'sync_complete' => '#27ae60',
-                'sync_error' => '#e74c3c',
-                'webhook' => '#2980b9',
-            ];
-
-            $typeLabels = [
-                'registered' => 'Connected',
-                'disconnected' => 'Disconnected',
-                'sync_start' => 'Sync',
-                'sync_complete' => 'Sync OK',
-                'sync_error' => 'Error',
-                'webhook' => 'Webhook',
-            ];
-
-            $html .= '<table class="table table-striped" style="font-size:13px;">';
-            $html .= '<thead><tr>'
-                . '<th>' . $this->l('Date') . '</th>'
-                . '<th>' . $this->l('Type') . '</th>'
-                . '<th>' . $this->l('Message') . '</th>'
-                . '<th>' . $this->l('Details') . '</th>'
-                . '</tr></thead><tbody>';
-
-            foreach ($logs as $log) {
-                $color = isset($badgeColors[$log['type']]) ? $badgeColors[$log['type']] : '#95a5a6';
-                $label = isset($typeLabels[$log['type']]) ? $typeLabels[$log['type']] : $log['type'];
-
-                $details = '—';
-                if (!empty($log['details']) && is_array($log['details'])) {
-                    $parts = [];
-                    foreach ($log['details'] as $k => $v) {
-                        if (is_array($v)) {
-                            $sub = [];
-                            foreach ($v as $sk => $sv) {
-                                $sub[] = is_int($sk) ? $sv : $sk . '=' . $sv;
-                            }
-                            $v = implode(', ', $sub);
+            $details = "\xE2\x80\x94"; // em dash
+            if (!empty($log['details']) && is_array($log['details'])) {
+                $parts = [];
+                foreach ($log['details'] as $k => $v) {
+                    if (is_array($v)) {
+                        $sub = [];
+                        foreach ($v as $sk => $sv) {
+                            $sub[] = is_int($sk) ? $sv : $sk . '=' . $sv;
                         }
-                        $parts[] = $k . ': ' . $v;
+                        $v = implode(', ', $sub);
                     }
-                    $details = htmlspecialchars(implode(' | ', $parts));
+                    $parts[] = $k . ': ' . $v;
                 }
-
-                $html .= '<tr>'
-                    . '<td style="white-space:nowrap;color:#888;font-size:12px;">' . date('d/m/Y H:i:s', (int) $log['time']) . '</td>'
-                    . '<td><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff;background:' . $color . ';">' . htmlspecialchars($label) . '</span></td>'
-                    . '<td>' . htmlspecialchars($log['message']) . '</td>'
-                    . '<td style="color:#888;font-size:12px;max-width:250px;word-break:break-word;">' . $details . '</td>'
-                    . '</tr>';
+                $details = implode(' | ', $parts);
             }
 
-            $html .= '</tbody></table>';
+            $logs[] = [
+                'color' => $color,
+                'label' => $label,
+                'message' => $log['message'],
+                'details' => $details,
+                'date_added' => date('d/m/Y H:i:s', (int) $log['time']),
+            ];
         }
 
-        $html .= '</div>';
+        $this->context->smarty->assign([
+            'logs' => $logs,
+            'admin_url' => $adminUrl,
+            'has_logs' => !empty($logs),
+            'sync_in_progress' => !empty($inProgress),
+        ]);
 
-        if ($inProgress) {
-            $html .= '<script>setTimeout(function() { location.reload(); }, 10000);</script>';
-        }
-
-        return $html;
+        return $this->display(__FILE__, 'views/templates/admin/logs.tpl');
     }
 
     protected function formatTimeAgo($timestamp)

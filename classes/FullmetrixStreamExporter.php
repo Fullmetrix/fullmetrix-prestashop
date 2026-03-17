@@ -1349,8 +1349,7 @@ class FullmetrixStreamExporter
 
     private function safeQuery($sql, $context = '', $retries = 2)
     {
-
-        for ($attempt = 0; $attempt <= $retries; $attempt++) {
+        for ($attempt = 0; $attempt <= $retries; ++$attempt) {
             try {
                 $rows = $this->db->executeS($sql);
             } catch (\Throwable $e) {
