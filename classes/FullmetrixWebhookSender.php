@@ -6,7 +6,6 @@
  * @copyright 2024-2026 Fullmetrix
  * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
  */
-
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -33,8 +32,8 @@ class FullmetrixWebhookSender
     private static $link;
 
     /**
-     * @param int        $idShop Shop ID
-     * @param \Link|null $link   PrestaShop Link instance
+     * @param int $idShop Shop ID
+     * @param \Link|null $link PrestaShop Link instance
      */
     public static function init($idShop = 1, $link = null)
     {
@@ -61,7 +60,7 @@ class FullmetrixWebhookSender
     /**
      * Enqueue an entity to be sent as a webhook at shutdown.
      *
-     * @param string     $entityType order|customer|product|category|coupon|refund
+     * @param string $entityType order|customer|product|category|coupon|refund
      * @param int|string $id
      */
     public static function enqueue($entityType, $id)

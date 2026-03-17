@@ -6,7 +6,6 @@
  * @copyright 2024-2026 Fullmetrix
  * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
  */
-
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -17,9 +16,9 @@ class FullmetrixLogger
     const CONFIG_KEY = 'FULLMETRIX_LOGS';
 
     /**
-     * @param string $type    registered|disconnected|sync_start|sync_complete|sync_error|webhook
+     * @param string $type registered|disconnected|sync_start|sync_complete|sync_error|webhook
      * @param string $message
-     * @param array  $details
+     * @param array $details
      */
     public static function log($type, $message, $details = [])
     {
@@ -30,10 +29,10 @@ class FullmetrixLogger
         }
 
         array_unshift($logs, [
-            'type'    => $type,
+            'type' => $type,
             'message' => $message,
             'details' => $details,
-            'time'    => time(),
+            'time' => time(),
         ]);
 
         if (count($logs) > self::MAX_ENTRIES) {

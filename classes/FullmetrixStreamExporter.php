@@ -6,7 +6,6 @@
  * @copyright 2024-2026 Fullmetrix
  * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
  */
-
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -24,8 +23,8 @@ class FullmetrixStreamExporter
     private $cartRuleColumnsCache;
 
     /**
-     * @param int       $idShop Shop ID
-     * @param \Link|null $link   PrestaShop Link instance for URL generation
+     * @param int $idShop Shop ID
+     * @param \Link|null $link PrestaShop Link instance for URL generation
      */
     public function __construct($idShop = 1, $link = null)
     {
@@ -46,14 +45,17 @@ class FullmetrixStreamExporter
             return null;
         }
         $d = trim((string) $mysqlDate);
+
         if ($d === '' || $d === '0000-00-00 00:00:00' || $d === '0000-00-00' || strlen($d) < 10) {
             return null;
         }
+
         // MySQL: "2025-03-16 14:30:00" → ISO: "2025-03-16T14:30:00Z"
         // Date-only: "2025-03-16" → "2025-03-16T00:00:00Z"
         if (strlen($d) === 10) {
             return $d . 'T00:00:00Z';
         }
+
         return str_replace(' ', 'T', $d) . 'Z';
     }
 
@@ -223,6 +225,7 @@ class FullmetrixStreamExporter
         } catch (\Throwable $e) {
             // Fallback: assume columns don't exist
         }
+
         return $cols;
     }
 
@@ -1410,6 +1413,7 @@ class FullmetrixStreamExporter
         } catch (\Throwable $e) {
             // fallback
         }
+
         return $afterId + $this->batchSize;
     }
 
@@ -1417,7 +1421,7 @@ class FullmetrixStreamExporter
 
     private function maybeGc()
     {
-        $this->gcCounter++;
+        ++$this->gcCounter;
         if ($this->gcCounter % 3 === 0 && function_exists('gc_collect_cycles')) {
             gc_collect_cycles();
         }
@@ -1465,7 +1469,7 @@ class FullmetrixStreamExporter
      * Format a single entity by type and ID, returning the same data shape
      * as the NDJSON stream. Returns null if entity not found.
      *
-     * @param string     $entityType order|customer|product|category|coupon|refund
+     * @param string $entityType order|customer|product|category|coupon|refund
      * @param int|string $id
      * @return array|null
      */

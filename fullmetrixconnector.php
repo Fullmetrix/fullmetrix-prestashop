@@ -6,7 +6,6 @@
  * @copyright 2024-2026 Fullmetrix
  * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
  */
-
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -555,21 +554,21 @@ class FullmetrixConnector extends Module
             $html .= '<p class="text-muted">' . $this->l('No activity recorded.') . '</p>';
         } else {
             $badgeColors = [
-                'registered'    => '#27ae60',
-                'disconnected'  => '#95a5a6',
-                'sync_start'    => '#2980b9',
+                'registered' => '#27ae60',
+                'disconnected' => '#95a5a6',
+                'sync_start' => '#2980b9',
                 'sync_complete' => '#27ae60',
-                'sync_error'    => '#e74c3c',
-                'webhook'       => '#2980b9',
+                'sync_error' => '#e74c3c',
+                'webhook' => '#2980b9',
             ];
 
             $typeLabels = [
-                'registered'    => 'Connected',
-                'disconnected'  => 'Disconnected',
-                'sync_start'    => 'Sync',
+                'registered' => 'Connected',
+                'disconnected' => 'Disconnected',
+                'sync_start' => 'Sync',
                 'sync_complete' => 'Sync OK',
-                'sync_error'    => 'Error',
-                'webhook'       => 'Webhook',
+                'sync_error' => 'Error',
+                'webhook' => 'Webhook',
             ];
 
             $html .= '<table class="table table-striped" style="font-size:13px;">';

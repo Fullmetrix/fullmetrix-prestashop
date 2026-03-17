@@ -6,7 +6,6 @@
  * @copyright 2024-2026 Fullmetrix
  * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
  */
-
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -22,8 +21,8 @@ class FullmetrixFastExporter
     private $link;
 
     /**
-     * @param int        $idShop Shop ID
-     * @param \Link|null $link   PrestaShop Link instance for URL generation
+     * @param int $idShop Shop ID
+     * @param \Link|null $link PrestaShop Link instance for URL generation
      */
     public function __construct($idShop = 1, $link = null)
     {
