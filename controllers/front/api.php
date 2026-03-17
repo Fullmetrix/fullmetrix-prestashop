@@ -26,6 +26,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         try {
             parent::init();
         } catch (\Throwable $e) {
+            /* intentionally empty */
         }
 
         if (!headers_sent()) {
@@ -147,7 +148,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $this->trackSyncStart($type, $syncType);
 
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixFastExporter.php';
-        $exporter = new FullmetrixFastExporter();
+        $exporter = new FullmetrixFastExporter(
+            (int) Context::getContext()->shop->id ?: 1,
+            Context::getContext()->link
+        );
 
         switch ($type) {
             case 'customers':
@@ -178,7 +182,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixStreamExporter.php';
 
-        $exporter = new FullmetrixStreamExporter();
+        $exporter = new FullmetrixStreamExporter(
+            (int) Context::getContext()->shop->id ?: 1,
+            Context::getContext()->link
+        );
 
         if ($type === 'stream_orders') {
             $exporter->streamOrdersOnly($syncType, $since);
@@ -193,7 +200,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixStreamExporter.php';
 
-        $exporter = new FullmetrixStreamExporter();
+        $exporter = new FullmetrixStreamExporter(
+            (int) Context::getContext()->shop->id ?: 1,
+            Context::getContext()->link
+        );
         $exporter->streamEntity($entity, $syncType, $since);
     }
 
@@ -207,7 +217,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $limit = min(500000, max(1, (int) Tools::getValue('limit', 200000)));
         $offset = max(0, (int) Tools::getValue('offset', 0));
 
-        $exporter = new FullmetrixFastExporter();
+        $exporter = new FullmetrixFastExporter(
+            (int) Context::getContext()->shop->id ?: 1,
+            Context::getContext()->link
+        );
         $items = $exporter->getUpdatedIds($type, $days, $hours, $limit, $offset);
 
         $this->sendJson([
@@ -271,7 +284,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $locale = $lang->locale ?: $lang->language_code ?: 'fr-FR';
 
         // Currency format
-        $format = $currency->format ?: 0;
+        $format = (int) $currency->format;
         // PS format: 1 = X.XX€, 2 = X,XX€, 3 = €X.XX, 4 = €X,XX, 5 = X'XX CHF
         $position = in_array($format, [3, 4], true) ? 'left' : 'right';
 
@@ -284,7 +297,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $decimalSeparator = '.';
         }
 
-        $numDecimals = (int) ($currency->precision ?? 2);
+        $numDecimals = (int) $currency->precision;
 
         return [
             'currency' => $isoCode,

@@ -19,18 +19,21 @@ class FullmetrixStreamExporter
     private $idShop;
     private $batchSize = 1000;
     private $memoryLimitBytes;
-    private $currencyCache = [];
-    private $countryCache = [];
-    private $stateCache = [];
-    private $orderColumnsCache = null;
-    private $cartRuleColumnsCache = null;
+    private $link;
+    private $orderColumnsCache;
+    private $cartRuleColumnsCache;
 
-    public function __construct()
+    /**
+     * @param int       $idShop Shop ID
+     * @param \Link|null $link   PrestaShop Link instance for URL generation
+     */
+    public function __construct($idShop = 1, $link = null)
     {
         $this->db = Db::getInstance(_PS_USE_SQL_SLAVE_);
         $this->prefix = _DB_PREFIX_;
         $this->idLang = (int) Configuration::get('PS_LANG_DEFAULT') ?: 1;
-        $this->idShop = (int) Context::getContext()->shop->id ?: 1;
+        $this->idShop = (int) $idShop;
+        $this->link = $link;
     }
 
     /**
@@ -230,7 +233,7 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND o.date_upd > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND o.date_upd > \'' . pSQL($since) . '\'';
         }
 
         // Detect available optional columns once per sync (cached)
@@ -239,11 +242,11 @@ class FullmetrixStreamExporter
         }
         $optionalCols = $this->orderColumnsCache;
 
-        do {
-            $noteCol = $optionalCols['note'] ? ', o.note' : ", '' AS note";
+        while (true) {
+            $noteCol = $optionalCols['note'] ? ', o.note' : ', \'\' AS note';
             $wrappingCol = $optionalCols['total_wrapping_tax_incl']
                 ? ', o.total_wrapping_tax_incl'
-                : ", 0 AS total_wrapping_tax_incl";
+                : ', 0 AS total_wrapping_tax_incl';
 
             $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
                        o.id_address_delivery, o.id_address_invoice,
@@ -352,14 +355,14 @@ class FullmetrixStreamExporter
                     ],
                 ]);
 
-                $count++;
+                ++$count;
             }
 
             $lastId = (int) end($rows)['id_order'];
             unset($rows, $addressMap, $lineItemsMap, $carriersMap, $couponMap, $paymentMap);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -504,13 +507,15 @@ class FullmetrixStreamExporter
         $hasValueTaxIncl = false;
         try {
             $result = $this->db->executeS(
-                'SHOW COLUMNS FROM ' . $this->prefix . "order_cart_rule WHERE Field = 'value_tax_incl'"
+                'SHOW COLUMNS FROM ' . $this->prefix . 'order_cart_rule WHERE Field = \'value_tax_incl\''
             );
             if (is_array($result) && count($result) > 0) {
                 $hasValueTaxIncl = true;
             }
         } catch (\Throwable $e) {
+            /* intentionally empty */
         }
+
         return $hasValueTaxIncl;
     }
 
@@ -551,7 +556,7 @@ class FullmetrixStreamExporter
             return [];
         }
 
-        $refList = "'" . implode("','", $references) . "'";
+        $refList = '\'' . implode('\',\'', $references) . '\'';
 
         $sql = 'SELECT op.order_reference, op.payment_method, op.amount,
                    op.transaction_id, op.card_brand, op.date_add
@@ -583,10 +588,10 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND os.date_add > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND os.date_add > \'' . pSQL($since) . '\'';
         }
 
-        do {
+        while (true) {
             $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
                        os.total_products_tax_incl, os.total_shipping_tax_incl,
                        os.amount, os.shipping_cost_amount,
@@ -633,14 +638,14 @@ class FullmetrixStreamExporter
                     ],
                 ]);
 
-                $count++;
+                ++$count;
             }
 
             $lastId = (int) end($rows)['id_order_slip'];
             unset($rows, $detailMap);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -683,10 +688,10 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND c.date_upd > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND c.date_upd > \'' . pSQL($since) . '\'';
         }
 
-        do {
+        while (true) {
             $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
                        c.company, c.birthday, c.newsletter, c.optin,
                        c.website, c.siret, c.ape, c.note,
@@ -777,14 +782,14 @@ class FullmetrixStreamExporter
                     ],
                 ]);
 
-                $count++;
+                ++$count;
             }
 
             $lastId = (int) end($rows)['id_customer'];
             unset($rows, $addrMap, $statsMap);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -852,10 +857,10 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND p.date_upd > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND p.date_upd > \'' . pSQL($since) . '\'';
         }
 
-        do {
+        while (true) {
             $sql = 'SELECT p.id_product, p.reference, p.price, p.wholesale_price,
                        p.active, p.weight, p.width, p.height, p.depth,
                        p.ean13, p.upc, p.isbn, p.condition, p.visibility,
@@ -947,7 +952,7 @@ class FullmetrixStreamExporter
                         'date_modified' => $this->toIso($row['date_upd']),
                     ],
                 ]);
-                $count++;
+                ++$count;
 
                 // Emit variations as separate products
                 if ($hasCombinations) {
@@ -989,7 +994,7 @@ class FullmetrixStreamExporter
                                 'date_modified' => $this->toIso($row['date_upd']),
                             ],
                         ]);
-                        $count++;
+                        ++$count;
                     }
                 }
             }
@@ -998,7 +1003,7 @@ class FullmetrixStreamExporter
             unset($rows, $categoriesMap, $tagsMap, $imagesMap, $salePriceMap, $combosMap);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -1066,7 +1071,7 @@ class FullmetrixStreamExporter
         }
 
         // Build image URLs
-        $link = Context::getContext()->link;
+        $link = $this->link;
 
         foreach ($rows as $row) {
             $pid = (int) $row['id_product'];
@@ -1094,12 +1099,12 @@ class FullmetrixStreamExporter
         $now = date('Y-m-d H:i:s');
 
         $sql = 'SELECT id_product, reduction, reduction_type, reduction_tax
-            FROM ' . $this->prefix . "specific_price
-            WHERE id_product IN (" . $productIdsList . ")
+            FROM ' . $this->prefix . 'specific_price
+            WHERE id_product IN (' . $productIdsList . ')
             AND id_group = 0 AND id_customer = 0 AND from_quantity <= 1
-            AND ((`from` = '0000-00-00 00:00:00' OR `from` <= '" . pSQL($now) . "')
-            AND (`to` = '0000-00-00 00:00:00' OR `to` >= '" . pSQL($now) . "'))
-            ORDER BY id_specific_price ASC";
+            AND ((`from` = \'0000-00-00 00:00:00\' OR `from` <= \'' . pSQL($now) . '\')
+            AND (`to` = \'0000-00-00 00:00:00\' OR `to` >= \'' . pSQL($now) . '\'))
+            ORDER BY id_specific_price ASC';
 
         $rows = $this->safeQuery($sql, 'product_prices');
         $map = [];
@@ -1164,10 +1169,10 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND c.date_upd > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND c.date_upd > \'' . pSQL($since) . '\'';
         }
 
-        do {
+        while (true) {
             $sql = 'SELECT c.id_category, c.id_parent, c.active, c.level_depth,
                        c.date_add, c.date_upd,
                        cl.name, cl.description, cl.link_rewrite
@@ -1216,14 +1221,14 @@ class FullmetrixStreamExporter
                         'image_url' => null,
                     ],
                 ]);
-                $count++;
+                ++$count;
             }
 
             $lastId = (int) end($rows)['id_category'];
             unset($rows);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -1242,10 +1247,10 @@ class FullmetrixStreamExporter
 
         $sinceWhere = '';
         if ($syncType === 'incremental' && $since) {
-            $sinceWhere = " AND cr.date_add > '" . pSQL($since) . "'";
+            $sinceWhere = ' AND cr.date_add > \'' . pSQL($since) . '\'';
         }
 
-        do {
+        while (true) {
             $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
                        cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
                        cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
@@ -1311,14 +1316,14 @@ class FullmetrixStreamExporter
                             ? $this->toIso($row['date_to']) : null,
                     ],
                 ]);
-                $count++;
+                ++$count;
             }
 
             $lastId = (int) end($rows)['id_cart_rule'];
             unset($rows);
             $this->adaptBatchSize();
             $this->maybeGc();
-        } while (true);
+        }
 
         $this->sendLine([
             'type' => 'entity_complete',
@@ -1334,20 +1339,13 @@ class FullmetrixStreamExporter
     {
         try {
             $ssl = Configuration::get('PS_SSL_ENABLED') || Tools::usingSecureMode();
-            $context = Context::getContext();
 
-            if ($context && $context->shop && !empty($context->shop->domain)) {
-                $domain = $ssl && !empty($context->shop->domain_ssl)
-                    ? $context->shop->domain_ssl
-                    : $context->shop->domain;
-                $physicalUri = $context->shop->physical_uri ?: '/';
-            } else {
-                $domain = Configuration::get($ssl ? 'PS_SHOP_DOMAIN_SSL' : 'PS_SHOP_DOMAIN');
-                if (empty($domain)) {
-                    $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
-                }
-                $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
+            $domain = Configuration::get($ssl ? 'PS_SHOP_DOMAIN_SSL' : 'PS_SHOP_DOMAIN');
+            if (empty($domain)) {
+                $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
             }
+
+            $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
 
             return rtrim(($ssl ? 'https://' : 'http://') . $domain . $physicalUri, '/');
         } catch (\Throwable $e) {
@@ -1367,7 +1365,7 @@ class FullmetrixStreamExporter
                 }
                 $this->sendLine([
                     'type' => 'error',
-                    'message' => 'SQL exception' . ($context ? " [$context]" : '') . ': ' . $e->getMessage(),
+                    'message' => 'SQL exception' . ($context ? ' [' . $context . ']' : '') . ': ' . $e->getMessage(),
                     'attempt' => $attempt + 1,
                 ]);
                 return false;
@@ -1380,7 +1378,7 @@ class FullmetrixStreamExporter
                 $error = method_exists($this->db, 'getMsgError') ? $this->db->getMsgError() : 'Unknown SQL error';
                 $this->sendLine([
                     'type' => 'error',
-                    'message' => 'SQL error' . ($context ? " [$context]" : '') . ': ' . $error,
+                    'message' => 'SQL error' . ($context ? ' [' . $context . ']' : '') . ': ' . $error,
                     'attempt' => $attempt + 1,
                 ]);
                 return false;
@@ -1502,7 +1500,7 @@ class FullmetrixStreamExporter
         $wrappingCol = $optionalCols['total_wrapping_tax_incl']
             ? ', o.total_wrapping_tax_incl'
             : ', 0 AS total_wrapping_tax_incl';
-        $noteCol = $optionalCols['note'] ? ', o.note' : ", '' AS note";
+        $noteCol = $optionalCols['note'] ? ', o.note' : ', \'\' AS note';
 
         $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
                    o.id_address_delivery, o.id_address_invoice,

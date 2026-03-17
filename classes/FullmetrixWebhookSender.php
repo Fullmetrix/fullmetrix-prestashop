@@ -26,8 +26,21 @@ class FullmetrixWebhookSender
     /** @var bool */
     private static $shutdownRegistered = false;
 
-    public static function init()
+    /** @var int */
+    private static $idShop = 1;
+
+    /** @var \Link|null */
+    private static $link;
+
+    /**
+     * @param int        $idShop Shop ID
+     * @param \Link|null $link   PrestaShop Link instance
+     */
+    public static function init($idShop = 1, $link = null)
     {
+        self::$idShop = (int) $idShop;
+        self::$link = $link;
+
         // Only activate if webhooks flag is set
         if (!Configuration::get('FULLMETRIX_WEBHOOKS_ENABLED')) {
             return;
@@ -81,7 +94,7 @@ class FullmetrixWebhookSender
             return;
         }
 
-        $exporter = new FullmetrixStreamExporter();
+        $exporter = new FullmetrixStreamExporter(self::$idShop, self::$link);
         $apiUrl = FullmetrixConnector::getApiBase() . '/../webhooks/ecommerce';
 
         // Build summary for logging

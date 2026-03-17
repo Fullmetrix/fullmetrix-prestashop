@@ -19,22 +19,28 @@ class FullmetrixFastExporter
     private $prefix;
     private $idLang;
     private $idShop;
+    private $link;
 
-    public function __construct()
+    /**
+     * @param int        $idShop Shop ID
+     * @param \Link|null $link   PrestaShop Link instance for URL generation
+     */
+    public function __construct($idShop = 1, $link = null)
     {
         $this->db = Db::getInstance(_PS_USE_SQL_SLAVE_);
         $this->prefix = _DB_PREFIX_;
         $this->idLang = (int) Configuration::get('PS_LANG_DEFAULT') ?: 1;
-        $this->idShop = (int) Context::getContext()->shop->id ?: 1;
+        $this->idShop = (int) $idShop;
+        $this->link = $link;
     }
 
     public function exportOrdersFast($page = 1, $perPage = 100, $since = null)
     {
         $offset = ($page - 1) * $perPage;
 
-        $where = "WHERE 1=1";
+        $where = 'WHERE 1=1';
         if ($since) {
-            $where .= " AND o.date_upd > '" . pSQL($since) . "'";
+            $where .= ' AND o.date_upd > \'' . pSQL($since) . '\'';
         }
 
         $countQuery = "SELECT COUNT(*) FROM {$this->prefix}orders o {$where}";
@@ -549,15 +555,18 @@ class FullmetrixFastExporter
     private function buildImageUrl($linkRewrite, $idImage)
     {
         try {
-            $link = Context::getContext()->link;
-            if ($link) {
-                $url = $link->getImageLink($linkRewrite, $idImage, 'home_default');
+            if ($this->link) {
+                $url = $this->link->getImageLink($linkRewrite, $idImage, 'home_default');
                 if ($url && strpos($url, 'http') !== 0) {
                     $url = 'https://' . $url;
                 }
+
                 return $url;
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable $e) {
+            /* intentionally empty */
+        }
+
         return null;
     }
 
@@ -579,20 +588,13 @@ class FullmetrixFastExporter
     {
         try {
             $ssl = Configuration::get('PS_SSL_ENABLED') || Tools::usingSecureMode();
-            $context = Context::getContext();
 
-            if ($context && $context->shop && !empty($context->shop->domain)) {
-                $domain = $ssl && !empty($context->shop->domain_ssl)
-                    ? $context->shop->domain_ssl
-                    : $context->shop->domain;
-                $physicalUri = $context->shop->physical_uri ?: '/';
-            } else {
-                $domain = Configuration::get($ssl ? 'PS_SHOP_DOMAIN_SSL' : 'PS_SHOP_DOMAIN');
-                if (empty($domain)) {
-                    $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
-                }
-                $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
+            $domain = Configuration::get($ssl ? 'PS_SHOP_DOMAIN_SSL' : 'PS_SHOP_DOMAIN');
+            if (empty($domain)) {
+                $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
             }
+
+            $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
 
             return rtrim(($ssl ? 'https://' : 'http://') . $domain . $physicalUri, '/');
         } catch (\Throwable $e) {

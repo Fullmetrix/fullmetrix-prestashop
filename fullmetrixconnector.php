@@ -32,7 +32,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = self::FULLMETRIX_VERSION;
+        $this->version = '1.0.0';
         $this->author = 'Fullmetrix';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => '8.99.99'];
@@ -44,7 +44,11 @@ class FullmetrixConnector extends Module
         $this->description = $this->l('Connect your PrestaShop store to Fullmetrix to sync your orders.');
         $this->confirmUninstall = $this->l('Are you sure you want to uninstall the Fullmetrix module?');
 
-        FullmetrixWebhookSender::init();
+        $context = Context::getContext();
+        $shopId = ($context && $context->shop) ? (int) $context->shop->id : 1;
+        $link = ($context) ? $context->link : null;
+
+        FullmetrixWebhookSender::init($shopId, $link);
     }
 
     public function install()
@@ -124,16 +128,16 @@ class FullmetrixConnector extends Module
         $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, '');
 
         $ch = curl_init($apiBase . '/config');
-        curl_setopt_array($ch, array(
+        curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 5,
-            CURLOPT_HTTPHEADER => array(
+            CURLOPT_HTTPHEADER => [
                 'X-Fullmetrix-Connection-Code: ' . $headers['X-Fullmetrix-Connection-Code'],
                 'X-Fullmetrix-Signature: ' . $headers['X-Fullmetrix-Signature'],
                 'X-Fullmetrix-Timestamp: ' . $headers['X-Fullmetrix-Timestamp'],
                 'X-Fullmetrix-Plugin-Version: ' . self::FULLMETRIX_VERSION,
-            ),
-        ));
+            ],
+        ]);
         $body = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
@@ -723,7 +727,7 @@ class FullmetrixConnector extends Module
         $lang = new \Language($langId);
         $locale = $lang->locale ?: $lang->language_code ?: 'fr-FR';
 
-        $format = $currency->format ?: 0;
+        $format = (int) $currency->format;
         $position = in_array($format, [3, 4], true) ? 'left' : 'right';
 
         $decimalSeparator = in_array($format, [2, 4], true) ? ',' : '.';
@@ -733,7 +737,7 @@ class FullmetrixConnector extends Module
             $decimalSeparator = '.';
         }
 
-        $numDecimals = (int) ($currency->precision ?? 2);
+        $numDecimals = (int) $currency->precision;
 
         return [
             'currency' => $isoCode,
