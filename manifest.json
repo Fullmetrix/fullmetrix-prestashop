@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimumRequired": "1.0.0",
-  "changelog": "Initial release: E-commerce analytics connector with order sync, streaming export, and webhook support."
+  "changelog": "WhatsApp widget now loads config directly from API (instant updates, no cache delay)."
 }

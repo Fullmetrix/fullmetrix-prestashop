@@ -19,7 +19,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.0.0';
+    const FULLMETRIX_VERSION = '1.1.0';
 
     public static function getApiBase()
     {
@@ -279,36 +279,8 @@ class FullmetrixConnector extends Module
         }
         $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
 
-        $forms = [];
-        if (!empty($config['activeForms']) && is_array($config['activeForms'])) {
-            foreach ($config['activeForms'] as $form) {
-                $forms[] = [
-                    'origin' => $origin,
-                    'id' => $form['id'],
-                    'token' => $form['publicToken'],
-                ];
-            }
-        }
-
-        // Inject WhatsApp widget
-        $whatsappWidget = null;
-        if (!empty($config['whatsappWidget']['enabled'])) {
-            $w = $config['whatsappWidget'];
-            $whatsappWidget = [
-                'origin' => $origin,
-                'phoneNumber' => $w['phoneNumber'] ?? '',
-                'welcomeMessage' => $w['welcomeMessage'] ?? '',
-                'position' => $w['position'] ?? 'right',
-                'color' => $w['color'] ?? '#25D366',
-            ];
-        }
-
-        $this->context->smarty->assign([
-            'forms' => $forms,
-            'whatsappWidget' => $whatsappWidget,
-        ]);
-
-        return $this->display(__FILE__, 'views/templates/hook/footer.tpl');
+        // Widget + forms loader is auto-loaded by the tracker script (t.js)
+        return '';
     }
 
     // ─── Webhook hook handlers ────────────────────────────────────────
