@@ -19,7 +19,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.1.0';
+    const FULLMETRIX_VERSION = '1.0.0';
 
     public static function getApiBase()
     {
@@ -101,7 +101,7 @@ class FullmetrixConnector extends Module
 
     private function maybeRebuildCart()
     {
-        if (self::$cartRebuildDone || empty($_GET['fm_cart'])) {
+        if (self::$cartRebuildDone || empty(Tools::getValue('fm_cart'))) {
             return;
         }
         self::$cartRebuildDone = true;

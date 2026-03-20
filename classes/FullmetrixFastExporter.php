@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixFastExporter
 {
-    const VERSION = '3.2.6';
+    const VERSION = '1.0.0';
 
     private $db;
     private $prefix;

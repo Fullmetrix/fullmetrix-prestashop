@@ -94,7 +94,7 @@ class FullmetrixWebhookSender
         }
 
         $exporter = new FullmetrixStreamExporter(self::$idShop, self::$link);
-        $apiUrl = FullmetrixConnector::getApiBase() . '/../webhooks/ecommerce';
+        $apiUrl = str_replace('/api/plugin', '/api/webhooks/ecommerce', FullmetrixConnector::getApiBase());
 
         // Build summary for logging
         $webhookSummary = [];
@@ -102,7 +102,7 @@ class FullmetrixWebhookSender
             $t = $entry['type'];
             $webhookSummary[$t] = isset($webhookSummary[$t]) ? $webhookSummary[$t] + 1 : 1;
         }
-        FullmetrixLogger::log('webhook', 'Envoi de ' . count(self::$queue) . ' webhook(s)', $webhookSummary);
+        FullmetrixLogger::log('webhook', 'Sending ' . count(self::$queue) . ' webhook(s)', $webhookSummary);
 
         foreach (self::$queue as $entry) {
             $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
@@ -143,10 +143,14 @@ class FullmetrixWebhookSender
             ]);
 
             // Send with 1 retry on failure
-            $result = @file_get_contents($apiUrl, false, $context);
+            $result = file_get_contents($apiUrl, false, $context);
             if ($result === false) {
+                FullmetrixLogger::log('webhook', 'Webhook delivery failed, retrying', ['entity' => $entry['type'], 'id' => $entry['id']]);
                 usleep(500000); // 500ms backoff
-                @file_get_contents($apiUrl, false, $context);
+                $retry = file_get_contents($apiUrl, false, $context);
+                if ($retry === false) {
+                    FullmetrixLogger::log('webhook', 'Webhook delivery failed after retry', ['entity' => $entry['type'], 'id' => $entry['id']]);
+                }
             }
         }
 
