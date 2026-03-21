@@ -107,6 +107,234 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         return true;
     }
 
+    private function handleCommand()
+    {
+        $rawBody = file_get_contents('php://input');
+        $body = json_decode($rawBody, true);
+
+        if (!is_array($body) || empty($body['action'])) {
+            $this->sendJsonError('Missing action', 400);
+            return;
+        }
+
+        $action = $body['action'];
+        $payload = isset($body['payload']) ? $body['payload'] : [];
+
+        switch ($action) {
+            case 'coupon.create':
+                $this->commandCouponCreate($payload);
+                break;
+            case 'coupon.update':
+                $this->commandCouponUpdate($payload);
+                break;
+            case 'coupon.delete':
+                $this->commandCouponDelete($payload);
+                break;
+            default:
+                $this->sendJsonError('Unknown action: ' . $action, 400);
+        }
+    }
+
+    private function commandCouponCreate($payload)
+    {
+        if (empty($payload['code'])) {
+            $this->sendJsonError('Missing coupon code', 400);
+            return;
+        }
+
+        $cartRule = new \CartRule();
+        $cartRule->code = pSQL($payload['code']);
+        $cartRule->active = true;
+
+        // Name is multilang in PrestaShop
+        $languages = \Language::getLanguages(false);
+        $name = !empty($payload['description']) ? $payload['description'] : $payload['code'];
+        foreach ($languages as $lang) {
+            $cartRule->name[$lang['id_lang']] = $name;
+        }
+
+        $this->applyCartRuleFields($cartRule, $payload);
+
+        if (!$cartRule->add()) {
+            $this->sendJsonError('Failed to create cart rule', 500);
+            return;
+        }
+
+        $this->sendJson([
+            'success' => true,
+            'data' => [
+                'id' => (int) $cartRule->id,
+                'code' => $cartRule->code,
+            ],
+        ]);
+    }
+
+    private function commandCouponUpdate($payload)
+    {
+        if (empty($payload['id'])) {
+            $this->sendJsonError('Missing coupon id', 400);
+            return;
+        }
+
+        $cartRule = new \CartRule((int) $payload['id']);
+        if (!\Validate::isLoadedObject($cartRule)) {
+            $this->sendJsonError('Cart rule not found', 404);
+            return;
+        }
+
+        if (isset($payload['code'])) {
+            $cartRule->code = pSQL($payload['code']);
+        }
+
+        if (isset($payload['description'])) {
+            $languages = \Language::getLanguages(false);
+            foreach ($languages as $lang) {
+                $cartRule->name[$lang['id_lang']] = $payload['description'];
+            }
+        }
+
+        $this->applyCartRuleFields($cartRule, $payload);
+
+        if (!$cartRule->update()) {
+            $this->sendJsonError('Failed to update cart rule', 500);
+            return;
+        }
+
+        $this->sendJson([
+            'success' => true,
+            'data' => [
+                'id' => (int) $cartRule->id,
+                'code' => $cartRule->code,
+            ],
+        ]);
+    }
+
+    private function commandCouponDelete($payload)
+    {
+        if (empty($payload['id'])) {
+            $this->sendJsonError('Missing coupon id', 400);
+            return;
+        }
+
+        $cartRule = new \CartRule((int) $payload['id']);
+        if (!\Validate::isLoadedObject($cartRule)) {
+            $this->sendJsonError('Cart rule not found', 404);
+            return;
+        }
+
+        if (!$cartRule->delete()) {
+            $this->sendJsonError('Failed to delete cart rule', 500);
+            return;
+        }
+
+        $this->sendJson([
+            'success' => true,
+            'data' => ['id' => (int) $payload['id']],
+        ]);
+    }
+
+    private function applyCartRuleFields($cartRule, $payload)
+    {
+        // Discount type + amount
+        if (isset($payload['discountType'])) {
+            $cartRule->reduction_percent = 0;
+            $cartRule->reduction_amount = 0;
+            $cartRule->free_shipping = false;
+            $cartRule->reduction_tax = true; // apply on tax-included price
+
+            switch ($payload['discountType']) {
+                case 'percentage':
+                    $amount = isset($payload['amount']) ? (float) $payload['amount'] : 0;
+                    $cartRule->reduction_percent = min(100, max(0, $amount));
+                    break;
+                case 'fixed_cart':
+                case 'fixed_product':
+                    $cartRule->reduction_amount = isset($payload['amount']) ? (float) $payload['amount'] : 0;
+                    break;
+                case 'free_shipping':
+                    $cartRule->free_shipping = true;
+                    break;
+            }
+        } elseif (isset($payload['amount'])) {
+            // Update amount only without changing type
+            if ($cartRule->reduction_percent > 0) {
+                $cartRule->reduction_percent = min(100, max(0, (float) $payload['amount']));
+            } else {
+                $cartRule->reduction_amount = (float) $payload['amount'];
+            }
+        }
+
+        if (isset($payload['freeShipping'])) {
+            $cartRule->free_shipping = (bool) $payload['freeShipping'];
+        }
+
+        if (isset($payload['usageLimit'])) {
+            $cartRule->quantity = $payload['usageLimit'] === null ? 0 : (int) $payload['usageLimit'];
+        }
+
+        if (isset($payload['usageLimitPerUser'])) {
+            $cartRule->quantity_per_user = $payload['usageLimitPerUser'] === null ? 0 : (int) $payload['usageLimitPerUser'];
+        }
+
+        if (isset($payload['minimumAmount'])) {
+            $cartRule->minimum_amount = $payload['minimumAmount'] === null ? 0 : (float) $payload['minimumAmount'];
+            $cartRule->minimum_amount_tax = true;
+        }
+
+        if (array_key_exists('startsAt', $payload)) {
+            $cartRule->date_from = $payload['startsAt'] ? date('Y-m-d H:i:s', strtotime($payload['startsAt'])) : date('Y-m-d H:i:s');
+        } elseif (!$cartRule->id) {
+            // New cart rule — default to now
+            $cartRule->date_from = date('Y-m-d H:i:s');
+        }
+
+        if (array_key_exists('expiresAt', $payload)) {
+            $cartRule->date_to = $payload['expiresAt'] ? date('Y-m-d H:i:s', strtotime($payload['expiresAt'])) : '0000-00-00 00:00:00';
+        } elseif (!$cartRule->id) {
+            // New cart rule — default to 1 year from now
+            $cartRule->date_to = date('Y-m-d H:i:s', strtotime('+1 year'));
+        }
+
+        // Every customer (no group/customer restriction by default)
+        if (!$cartRule->id) {
+            $cartRule->id_customer = 0;
+        }
+    }
+
+    private function verifyCommandRequest()
+    {
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+
+        if (empty($secret)) {
+            return ['error' => 'Plugin not configured', 'status' => 401];
+        }
+
+        $signature = $this->getHeader('X-Fullmetrix-Signature');
+        $timestamp = $this->getHeader('X-Fullmetrix-Timestamp');
+        $code = $this->getHeader('X-Fullmetrix-Connection-Code');
+
+        if (empty($signature) || empty($timestamp) || empty($code)) {
+            return ['error' => 'Missing authentication headers', 'status' => 401];
+        }
+
+        $storedCode = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        if ($code !== $storedCode) {
+            return ['error' => 'Invalid connection code', 'status' => 401];
+        }
+
+        require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixSecurity.php';
+
+        // POST commands sign the body
+        $body = file_get_contents('php://input');
+        $isValid = FullmetrixSecurity::verifySignature($secret, $body, $signature, (int) $timestamp);
+
+        if (!$isValid) {
+            return ['error' => 'Invalid or expired signature', 'status' => 401];
+        }
+
+        return true;
+    }
+
     private function handleExport()
     {
         $type = Tools::getValue('type', 'orders');
@@ -114,6 +342,17 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $since = Tools::getValue('since', '');
         $page = max(1, (int) Tools::getValue('page', 1));
         $perPage = min(500, max(1, (int) Tools::getValue('per_page', 100)));
+
+        if ($type === 'command') {
+            // Command requests have body-signed HMAC — re-verify
+            $cmdVerify = $this->verifyCommandRequest();
+            if ($cmdVerify !== true) {
+                $this->sendJsonError($cmdVerify['error'], $cmdVerify['status']);
+                return;
+            }
+            $this->handleCommand();
+            return;
+        }
 
         if ($type === 'stream' || $type === 'stream_orders') {
             $this->handleStream($type, $syncType, $since);
