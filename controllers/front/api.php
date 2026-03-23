@@ -268,15 +268,15 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $cartRule->free_shipping = (bool) $payload['freeShipping'];
         }
 
-        if (isset($payload['usageLimit'])) {
+        if (array_key_exists('usageLimit', $payload)) {
             $cartRule->quantity = $payload['usageLimit'] === null ? 0 : (int) $payload['usageLimit'];
         }
 
-        if (isset($payload['usageLimitPerUser'])) {
+        if (array_key_exists('usageLimitPerUser', $payload)) {
             $cartRule->quantity_per_user = $payload['usageLimitPerUser'] === null ? 0 : (int) $payload['usageLimitPerUser'];
         }
 
-        if (isset($payload['minimumAmount'])) {
+        if (array_key_exists('minimumAmount', $payload)) {
             $cartRule->minimum_amount = $payload['minimumAmount'] === null ? 0 : (float) $payload['minimumAmount'];
             $cartRule->minimum_amount_tax = true;
         }
