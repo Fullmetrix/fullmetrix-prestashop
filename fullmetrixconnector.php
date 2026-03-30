@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.0.1';
+    const FULLMETRIX_VERSION = '1.0.2';
 
     public static function getApiBase()
     {
@@ -257,6 +257,7 @@ class FullmetrixConnector extends Module
         $this->context->smarty->assign([
             'origin' => $origin,
             'code' => $code,
+            'version' => self::FULLMETRIX_VERSION . '.' . floor(time() / 300),
         ]);
 
         return $this->display(__FILE__, 'views/templates/hook/header.tpl');
@@ -295,15 +296,15 @@ class FullmetrixConnector extends Module
             $order = $params['order'];
             FullmetrixWebhookSender::enqueue('order', (int) $order->id);
 
-            $customer = isset($params['customer']) && Validate::isLoadedObject($params['customer'])
+            $customerObj = isset($params['customer']) && $params['customer'] instanceof Customer && Validate::isLoadedObject($params['customer'])
                 ? $params['customer']
                 : new Customer((int) $order->id_customer);
-            if (Validate::isLoadedObject($customer) && !empty($customer->email)) {
+            if (Validate::isLoadedObject($customerObj) && !empty($customerObj->email)) {
                 $contact = [
-                    'email' => $customer->email,
-                    'first_name' => $customer->firstname,
-                    'last_name' => $customer->lastname,
-                    'customer_id' => (int) $customer->id,
+                    'email' => $customerObj->email,
+                    'first_name' => $customerObj->firstname,
+                    'last_name' => $customerObj->lastname,
+                    'customer_id' => (int) $customerObj->id,
                 ];
                 $address = new Address((int) $order->id_address_invoice);
                 if (Validate::isLoadedObject($address)) {
@@ -459,8 +460,10 @@ class FullmetrixConnector extends Module
 
     public function hookActionAuthentication($params)
     {
-        $customer = isset($params['customer']) ? $params['customer'] : null;
-        if (!$customer || empty($customer->email)) {
+        $customer = isset($params['customer']) && $params['customer'] instanceof Customer
+            ? $params['customer']
+            : null;
+        if (!$customer || !Validate::isLoadedObject($customer) || empty($customer->email)) {
             return;
         }
 
