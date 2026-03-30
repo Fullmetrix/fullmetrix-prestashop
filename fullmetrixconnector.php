@@ -14,12 +14,13 @@ require_once dirname(__FILE__) . '/classes/FullmetrixSecurity.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixFastExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixStreamExporter.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixWebhookSender.php';
+require_once dirname(__FILE__) . '/classes/FullmetrixTrackingSender.php';
 require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.0.0';
+    const FULLMETRIX_VERSION = '1.0.1';
 
     public static function getApiBase()
     {
@@ -31,7 +32,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.0.0';
+        $this->version = '1.0.1';
         $this->author = 'Fullmetrix';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => '8.99.99'];
@@ -48,6 +49,7 @@ class FullmetrixConnector extends Module
         $link = ($context) ? $context->link : null;
 
         FullmetrixWebhookSender::init($shopId, $link);
+        FullmetrixTrackingSender::init();
     }
 
     public function install()
@@ -67,6 +69,8 @@ class FullmetrixConnector extends Module
             && $this->registerHook('actionObjectCartRuleUpdateAfter')
             && $this->registerHook('actionOrderSlipAdd')
             && $this->registerHook('actionCategoryUpdate')
+            && $this->registerHook('actionCartSave')
+            && $this->registerHook('actionAuthentication')
             && Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '')
             && Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '')
             && Configuration::updateValue('FULLMETRIX_REGISTERED', false)
@@ -288,7 +292,32 @@ class FullmetrixConnector extends Module
     public function hookActionValidateOrder($params)
     {
         if (isset($params['order'])) {
-            FullmetrixWebhookSender::enqueue('order', (int) $params['order']->id);
+            $order = $params['order'];
+            FullmetrixWebhookSender::enqueue('order', (int) $order->id);
+
+            $customer = isset($params['customer']) && Validate::isLoadedObject($params['customer'])
+                ? $params['customer']
+                : new Customer((int) $order->id_customer);
+            if (Validate::isLoadedObject($customer) && !empty($customer->email)) {
+                $contact = [
+                    'email' => $customer->email,
+                    'first_name' => $customer->firstname,
+                    'last_name' => $customer->lastname,
+                    'customer_id' => (int) $customer->id,
+                ];
+                $address = new Address((int) $order->id_address_invoice);
+                if (Validate::isLoadedObject($address)) {
+                    $phone = $address->phone_mobile ?: ($address->phone ?: null);
+                    if ($phone) {
+                        $contact['phone'] = $phone;
+                    }
+                    $countryIso = Country::getIsoById((int) $address->id_country);
+                    if ($countryIso) {
+                        $contact['country_code'] = $countryIso;
+                    }
+                }
+                FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
+            }
         }
     }
 
@@ -363,6 +392,123 @@ class FullmetrixConnector extends Module
         if (isset($params['category'])) {
             FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
         }
+    }
+
+    // ─── Tracking hook handlers ─────────────────────────────────────
+
+    public function hookActionCartSave($params)
+    {
+        $cart = isset($params['cart']) ? $params['cart'] : null;
+        if (!$cart || !($cart instanceof Cart) || !$cart->id) {
+            return;
+        }
+
+        $products = $cart->getProducts();
+        if (empty($products)) {
+            return;
+        }
+
+        $context = Context::getContext();
+        $items = [];
+        foreach ($products as $p) {
+            $imageUrl = null;
+            if (!empty($p['id_image'])) {
+                $imageUrl = $context->link->getImageLink(
+                    isset($p['link_rewrite']) ? $p['link_rewrite'] : '',
+                    $p['id_image'],
+                    'home_default'
+                );
+                if ($imageUrl && strpos($imageUrl, 'http') !== 0) {
+                    $imageUrl = 'https://' . $imageUrl;
+                }
+            }
+
+            $items[] = [
+                'product_id' => (int) $p['id_product'],
+                'variation_id' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : null,
+                'name' => $p['name'],
+                'quantity' => (int) $p['cart_quantity'],
+                'price' => (float) $p['price_wt'],
+                'line_total' => (float) $p['total_wt'],
+                'sku' => !empty($p['reference']) ? $p['reference'] : null,
+                'image_url' => $imageUrl,
+                'url' => $context->link->getProductLink((int) $p['id_product']),
+            ];
+        }
+
+        $recoveryUrl = $this->buildCartRecoveryUrl($cart);
+
+        $cartSnapshot = [
+            'currency' => $context->currency ? $context->currency->iso_code : 'EUR',
+            'total' => (float) $cart->getOrderTotal(true, Cart::BOTH),
+            'subtotal' => (float) $cart->getOrderTotal(true, Cart::ONLY_PRODUCTS),
+            'discount_total' => abs((float) $cart->getOrderTotal(true, Cart::ONLY_DISCOUNTS)),
+            'shipping_total' => (float) $cart->getOrderTotal(true, Cart::ONLY_SHIPPING),
+            'tax_total' => (float) ($cart->getOrderTotal(true) - $cart->getOrderTotal(false)),
+            'coupon_codes' => array_map(function ($r) { return $r['name']; }, $cart->getCartRules()),
+            'item_count' => (int) $cart->nbProducts(),
+            'items' => $items,
+            'recovery_url' => $recoveryUrl,
+        ];
+
+        FullmetrixTrackingSender::enqueueEvent('cart_updated', [
+            'cart' => $cartSnapshot,
+            'source' => 'server',
+        ]);
+    }
+
+    public function hookActionAuthentication($params)
+    {
+        $customer = isset($params['customer']) ? $params['customer'] : null;
+        if (!$customer || empty($customer->email)) {
+            return;
+        }
+
+        $contact = [
+            'email' => $customer->email,
+            'first_name' => $customer->firstname ?: null,
+            'last_name' => $customer->lastname ?: null,
+            'customer_id' => (int) $customer->id,
+        ];
+
+        $addressId = (int) Address::getFirstCustomerAddressId($customer->id);
+        if ($addressId > 0) {
+            $address = new Address($addressId);
+            if (Validate::isLoadedObject($address)) {
+                $phone = $address->phone_mobile ?: ($address->phone ?: null);
+                if ($phone) {
+                    $contact['phone'] = $phone;
+                }
+            }
+        }
+
+        FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
+    }
+
+    private function buildCartRecoveryUrl(Cart $cart)
+    {
+        $products = $cart->getProducts();
+        if (empty($products)) {
+            return null;
+        }
+
+        $itemsData = [];
+        foreach ($products as $p) {
+            $itemsData[] = [
+                'id' => (int) $p['id_product'],
+                'v' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : 0,
+                'q' => (int) $p['cart_quantity'],
+            ];
+        }
+
+        $coupons = array_map(function ($r) { return $r['name']; }, $cart->getCartRules());
+        $payload = ['items' => $itemsData, 'c' => $coupons];
+        $encoded = strtr(base64_encode(json_encode($payload)), '+/', '-_');
+
+        $context = Context::getContext();
+        $baseUrl = $context->link->getPageLink('cart', true);
+        $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
+        return $baseUrl . $separator . 'fm_cart=' . $encoded;
     }
 
     // ─── Admin content ───────────────────────────────────────────────
