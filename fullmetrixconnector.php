@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.0.2';
+    const FULLMETRIX_VERSION = '1.1.0';
 
     public static function getApiBase()
     {

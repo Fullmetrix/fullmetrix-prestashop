@@ -2,7 +2,7 @@
 <module>
     <name>fullmetrixconnector</name>
     <displayName><![CDATA[Fullmetrix]]></displayName>
-    <version><![CDATA[1.0.2]]></version>
+    <version><![CDATA[1.1.0]]></version>
     <description><![CDATA[Connect your PrestaShop store to Fullmetrix to sync your orders.]]></description>
     <author><![CDATA[Fullmetrix]]></author>
     <tab><![CDATA[analytics_stats]]></tab>
