@@ -118,10 +118,8 @@ class FullmetrixTrackingSender
             $t = $e['event_type'];
             $summary[$t] = isset($summary[$t]) ? $summary[$t] + 1 : 1;
         }
-        FullmetrixLogger::log('tracking', 'Sent ' . count(self::$events) . ' tracking event(s)', $summary);
 
         if ($result === false) {
-            FullmetrixLogger::log('tracking', 'Tracking delivery failed', $summary);
         }
 
         self::$events = [];

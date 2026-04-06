@@ -561,7 +561,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             'started_at' => time(),
         ]));
 
-        FullmetrixLogger::log('sync_start', 'Sync started', [
             'type' => $type,
             'sync_type' => $syncType,
         ]);
@@ -616,7 +615,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         Configuration::updateValue('FULLMETRIX_LAST_SYNC', json_encode($stats));
 
-        FullmetrixLogger::log('sync_complete', 'Sync completed', [
             'type' => $type,
             'entities' => $stats['entities'],
         ]);

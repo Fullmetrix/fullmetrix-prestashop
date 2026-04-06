@@ -16,7 +16,6 @@
         <p class="text-muted">
             {l s='Fullmetrix is fetching your store data. Refresh this page to track progress.' mod='fullmetrixconnector'}
         </p>
-        <script>setTimeout(function() { location.reload(); }, 10000);</script>
 
     {elseif $last_sync}
         <div class="alert alert-success">

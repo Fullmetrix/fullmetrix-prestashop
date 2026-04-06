@@ -102,7 +102,6 @@ class FullmetrixWebhookSender
             $t = $entry['type'];
             $webhookSummary[$t] = isset($webhookSummary[$t]) ? $webhookSummary[$t] + 1 : 1;
         }
-        FullmetrixLogger::log('webhook', 'Sending ' . count(self::$queue) . ' webhook(s)', $webhookSummary);
 
         foreach (self::$queue as $entry) {
             $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
@@ -145,11 +144,9 @@ class FullmetrixWebhookSender
             // Send with 1 retry on failure
             $result = file_get_contents($apiUrl, false, $context);
             if ($result === false) {
-                FullmetrixLogger::log('webhook', 'Webhook delivery failed, retrying', ['entity' => $entry['type'], 'id' => $entry['id']]);
                 usleep(500000); // 500ms backoff
                 $retry = file_get_contents($apiUrl, false, $context);
                 if ($retry === false) {
-                    FullmetrixLogger::log('webhook', 'Webhook delivery failed after retry', ['entity' => $entry['type'], 'id' => $entry['id']]);
                 }
             }
         }

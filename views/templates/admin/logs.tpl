@@ -44,6 +44,3 @@
     {/if}
 </div>
 
-{if $sync_in_progress}
-    <script>setTimeout(function() { location.reload(); }, 10000);</script>
-{/if}

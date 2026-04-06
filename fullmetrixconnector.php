@@ -539,7 +539,6 @@ class FullmetrixConnector extends Module
 
                 if ($result === true) {
                     $output .= $this->displayConfirmation($this->l('Connection successful! Your store is now connected to Fullmetrix.'));
-                    FullmetrixLogger::log('registered', 'Store connected to Fullmetrix', ['code' => $connectionCode]);
                 } else {
                     $output .= $this->displayError($result);
                 }
@@ -547,7 +546,6 @@ class FullmetrixConnector extends Module
         }
 
         if (Tools::isSubmit('submitFullmetrixDisconnect')) {
-            FullmetrixLogger::log('disconnected', 'Store disconnected from Fullmetrix');
             Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '');
             Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '');
             Configuration::updateValue('FULLMETRIX_REGISTERED', false);
@@ -559,7 +557,6 @@ class FullmetrixConnector extends Module
         }
 
         if (Tools::isSubmit('submitFullmetrixClearLogs')) {
-            FullmetrixLogger::clear();
             $output .= $this->displayConfirmation($this->l('Logs cleared.'));
         }
 
@@ -772,7 +769,6 @@ class FullmetrixConnector extends Module
 
     protected function renderLogsTab()
     {
-        $rawLogs = FullmetrixLogger::getLogs();
         $inProgressRaw = Configuration::get('FULLMETRIX_SYNC_IN_PROGRESS');
         $inProgress = !empty($inProgressRaw) ? json_decode($inProgressRaw, true) : null;
 
