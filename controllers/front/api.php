@@ -560,10 +560,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             'sync_type' => $syncType,
             'started_at' => time(),
         ]));
-
-            'type' => $type,
-            'sync_type' => $syncType,
-        ]);
     }
 
     private function trackSyncComplete($type, $result)
@@ -614,10 +610,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         Configuration::updateValue('FULLMETRIX_LAST_SYNC', json_encode($stats));
-
-            'type' => $type,
-            'entities' => $stats['entities'],
-        ]);
     }
 
     private function getHeader($name)
