@@ -247,6 +247,8 @@ class FullmetrixFastExporter
                 $products[] = [
                     'id' => $productId,
                     'name' => (string) $row['name'],
+                    'slug' => (string) ($row['link_rewrite'] ?? ''),
+                    'permalink' => \Context::getContext()->link->getProductLink($productId),
                     'sku' => (string) $row['reference'],
                     'type' => $hasCombinations ? 'variable' : 'simple',
                     'status' => $row['active'] ? 'publish' : 'draft',
