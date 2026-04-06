@@ -97,20 +97,23 @@ class FullmetrixConnector extends Module
     {
     }
 
-    /**
-     * Rebuild cart from recovery URL (?fm_cart=base64url payload).
-     * Called via actionFrontControllerSetMedia hook or displayHeader.
-     */
     private static $cartRebuildDone = false;
 
     private function maybeRebuildCart()
     {
-        if (self::$cartRebuildDone || empty(Tools::getValue('fm_cart'))) {
+        if (self::$cartRebuildDone || empty(Tools::getValue('fm_cart')) || empty(Tools::getValue('fm_cart_sig'))) {
             return;
         }
         self::$cartRebuildDone = true;
 
         $payload = Tools::getValue('fm_cart');
+        $signature = Tools::getValue('fm_cart_sig');
+
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        if (empty($secret) || !hash_equals(hash_hmac('sha256', $payload, $secret), $signature)) {
+            return;
+        }
+
         $json = base64_decode(strtr($payload, '-_', '+/'));
         if (!is_string($json) || empty($json)) {
             return;
@@ -507,11 +510,13 @@ class FullmetrixConnector extends Module
         $coupons = array_map(function ($r) { return $r['name']; }, $cart->getCartRules());
         $payload = ['items' => $itemsData, 'c' => $coupons];
         $encoded = strtr(base64_encode(json_encode($payload)), '+/', '-_');
+        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+        $signature = hash_hmac('sha256', $encoded, $secret);
 
         $context = Context::getContext();
         $baseUrl = $context->link->getPageLink('cart', true);
         $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
-        return $baseUrl . $separator . 'fm_cart=' . $encoded;
+        return $baseUrl . $separator . 'fm_cart=' . $encoded . '&fm_cart_sig=' . $signature;
     }
 
     // ─── Admin content ───────────────────────────────────────────────
