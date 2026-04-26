@@ -314,6 +314,13 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         if (isset($payload['excludeSaleItems'])) {
             $cartRule->reduction_exclude_special = (bool) $payload['excludeSaleItems'];
         }
+
+        if (isset($payload['productIds']) && is_array($payload['productIds']) && !empty($payload['productIds'])) {
+            $firstId = (int) $payload['productIds'][0];
+            if ($firstId > 0) {
+                $cartRule->gift_product = $firstId;
+            }
+        }
     }
 
     private function verifyCommandRequest()
