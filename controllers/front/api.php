@@ -51,10 +51,13 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     public function displayAjax()
     {
         try {
-            $verifyResult = $this->verifyRequest();
-            if ($verifyResult !== true) {
-                $this->sendJsonError($verifyResult['error'], $verifyResult['status']);
-                return;
+            $isCommand = Tools::getValue('type', '') === 'command';
+            if (!$isCommand) {
+                $verifyResult = $this->verifyRequest();
+                if ($verifyResult !== true) {
+                    $this->sendJsonError($verifyResult['error'], $verifyResult['status']);
+                    return;
+                }
             }
 
             $this->handleExport();
