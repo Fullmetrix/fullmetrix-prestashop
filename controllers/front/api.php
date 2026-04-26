@@ -295,9 +295,24 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $cartRule->date_to = date('Y-m-d H:i:s', strtotime('+1 year'));
         }
 
-        // Every customer (no group/customer restriction by default)
         if (!$cartRule->id) {
             $cartRule->id_customer = 0;
+        }
+
+        if (isset($payload['emailRestrictions']) && is_array($payload['emailRestrictions']) && !empty($payload['emailRestrictions'])) {
+            $email = trim($payload['emailRestrictions'][0]);
+            if (!empty($email)) {
+                $idCustomer = (int) \Db::getInstance()->getValue(
+                    'SELECT id_customer FROM ' . _DB_PREFIX_ . 'customer WHERE email = "' . pSQL($email) . '" AND deleted = 0 LIMIT 1'
+                );
+                if ($idCustomer > 0) {
+                    $cartRule->id_customer = $idCustomer;
+                }
+            }
+        }
+
+        if (isset($payload['excludeSaleItems'])) {
+            $cartRule->reduction_exclude_special = (bool) $payload['excludeSaleItems'];
         }
     }
 
