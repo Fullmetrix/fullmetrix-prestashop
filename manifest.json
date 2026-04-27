@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "minimumRequired": "1.0.0",
-  "changelog": "Fix command endpoint (coupon.create/update/delete) signature verification."
+  "changelog": "Forward native PrestaShop newsletter consent to Fullmetrix at order validation; backend retroactively imports email consent from existing customers on full sync."
 }

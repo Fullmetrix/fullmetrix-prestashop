@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.2.0';
+    const FULLMETRIX_VERSION = '1.3.0';
 
     public static function getApiBase()
     {
@@ -309,6 +309,7 @@ class FullmetrixConnector extends Module
                     'last_name' => $customerObj->lastname,
                     'customer_id' => (int) $customerObj->id,
                 ];
+                $phone = null;
                 $address = new Address((int) $order->id_address_invoice);
                 if (Validate::isLoadedObject($address)) {
                     $phone = $address->phone_mobile ?: ($address->phone ?: null);
@@ -321,8 +322,58 @@ class FullmetrixConnector extends Module
                     }
                 }
                 FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
+
+                $this->forwardCheckoutConsent($customerObj, $phone);
             }
         }
+    }
+
+    private function forwardCheckoutConsent(Customer $customer, $phone)
+    {
+        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        if (empty($code)) {
+            return;
+        }
+
+        $config = $this->getCachedConfig();
+        $channels = ['email'];
+        if (is_array($config) && !empty($config['checkoutConsent']['channels']) && is_array($config['checkoutConsent']['channels'])) {
+            $channels = $config['checkoutConsent']['channels'];
+        }
+
+        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
+        if (empty($apiBase)) {
+            $apiBase = self::FULLMETRIX_API_BASE;
+        }
+        $endpoint = rtrim(str_replace('/api/plugin', '', $apiBase), '/') . '/api/checkout-consent';
+
+        $payload = [
+            'key' => $code,
+            'email' => (string) $customer->email,
+            'consent' => (bool) $customer->newsletter,
+            'channels' => $channels,
+            'pageUrl' => Tools::getCurrentUrlProtocolPrefix() . Tools::getHttpHost() . $_SERVER['REQUEST_URI'],
+        ];
+        if (!empty($phone)) {
+            $payload['phone'] = $phone;
+        }
+
+        $body = json_encode($payload);
+        if ($body === false) {
+            return;
+        }
+
+        $ch = curl_init($endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        ]);
+        curl_exec($ch);
+        curl_close($ch);
     }
 
     public function hookActionOrderStatusUpdate($params)
