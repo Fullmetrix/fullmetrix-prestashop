@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "minimumRequired": "1.0.0",
-  "changelog": "Forward native PrestaShop newsletter consent to Fullmetrix at order validation; backend retroactively imports email consent from existing customers on full sync."
+  "changelog": "Gift coupons: cart_rule now stores gift_product_attribute when the offered product is a specific combination, so customers receive the exact variation chosen by the merchant instead of the default combination."
 }

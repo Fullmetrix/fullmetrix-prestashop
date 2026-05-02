@@ -324,6 +324,11 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
                 $cartRule->gift_product = $firstId;
             }
         }
+
+        if (array_key_exists('productAttributeId', $payload)) {
+            $attrId = $payload['productAttributeId'] === null ? 0 : (int) $payload['productAttributeId'];
+            $cartRule->gift_product_attribute = $attrId > 0 ? $attrId : 0;
+        }
     }
 
     private function verifyCommandRequest()
