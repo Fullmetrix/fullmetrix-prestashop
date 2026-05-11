@@ -50,13 +50,12 @@ class FullmetrixStreamExporter
             return null;
         }
 
-        // MySQL: "2025-03-16 14:30:00" → ISO: "2025-03-16T14:30:00Z"
-        // Date-only: "2025-03-16" → "2025-03-16T00:00:00Z"
-        if (strlen($d) === 10) {
-            return $d . 'T00:00:00Z';
+        $ts = strtotime($d);
+        if ($ts === false) {
+            return null;
         }
 
-        return str_replace(' ', 'T', $d) . 'Z';
+        return gmdate('Y-m-d\TH:i:s\Z', $ts);
     }
 
     public function streamEntity($entity, $syncType = 'full', $since = null)
