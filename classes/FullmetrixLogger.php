@@ -59,4 +59,25 @@ class FullmetrixLogger
     {
         Configuration::updateValue(self::CONFIG_KEY, '[]');
     }
+
+    /**
+     * Record a swallowed exception from a hook or shutdown handler.
+     * Never throws: the logger itself must not crash the caller.
+     *
+     * @param string $context Identifier of the calling site (e.g. hook name)
+     * @param \Throwable $e
+     */
+    public static function logException($context, $e)
+    {
+        try {
+            $details = [
+                'context' => (string) $context,
+                'error' => $e->getMessage(),
+                'file' => basename($e->getFile()) . ':' . $e->getLine(),
+            ];
+            self::log('sync_error', 'hook_exception', $details);
+        } catch (\Throwable $inner) {
+            // Logger itself must never bubble
+        }
+    }
 }

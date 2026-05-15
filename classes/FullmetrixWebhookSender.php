@@ -15,11 +15,13 @@ if (!defined('_PS_VERSION_')) {
  *
  * Queue + flush design: hooks enqueue {entity_type, id} pairs,
  * then the shutdown hook deduplicates and sends one POST per entity.
- * Uses stream_context_create with timeout for fire-and-forget.
+ *
+ * On FPM: fastcgi_finish_request releases the client before any HTTP call.
+ * On non-FPM: aggressive timeouts cap the worst-case latency for the client.
  */
 class FullmetrixWebhookSender
 {
-    /** @var array<string, array{type: string, id: int|string}> */
+    /** @var array<string, array{type: string, id: int|string, shop_id: int}> */
     private static $queue = [];
 
     /** @var bool */
@@ -31,16 +33,14 @@ class FullmetrixWebhookSender
     /** @var \Link|null */
     private static $link;
 
-    /**
-     * @param int $idShop Shop ID
-     * @param \Link|null $link PrestaShop Link instance
-     */
+    /** @var bool Shared flag so fastcgi_finish_request is only called once per request */
+    public static $responseFinished = false;
+
     public static function init($idShop = 1, $link = null)
     {
         self::$idShop = (int) $idShop;
         self::$link = $link;
 
-        // Only activate if webhooks flag is set
         if (!Configuration::get('FULLMETRIX_WEBHOOKS_ENABLED')) {
             return;
         }
@@ -57,28 +57,55 @@ class FullmetrixWebhookSender
         }
     }
 
-    /**
-     * Enqueue an entity to be sent as a webhook at shutdown.
-     *
-     * @param string $entityType order|customer|product|category|coupon|refund
-     * @param int|string $id
-     */
     public static function enqueue($entityType, $id)
     {
         if (!Configuration::get('FULLMETRIX_WEBHOOKS_ENABLED')) {
             return;
         }
 
-        $key = $entityType . ':' . $id;
+        $shopId = self::$idShop;
+        try {
+            $ctx = Context::getContext();
+            if ($ctx && $ctx->shop && !empty($ctx->shop->id)) {
+                $shopId = (int) $ctx->shop->id;
+            }
+        } catch (\Throwable $e) {
+            // Fall back to the static idShop captured at init
+        }
+
+        $key = $entityType . ':' . $id . ':' . $shopId;
         self::$queue[$key] = [
             'type' => $entityType,
             'id' => $id,
+            'shop_id' => (int) $shopId,
         ];
+    }
 
-        if (!self::$shutdownRegistered) {
-            register_shutdown_function([__CLASS__, 'flushQueue']);
-            self::$shutdownRegistered = true;
+    /**
+     * Release the client response if we're under FPM. Idempotent across senders.
+     */
+    public static function finishResponse()
+    {
+        if (self::$responseFinished) {
+            return;
         }
+        self::$responseFinished = true;
+
+        if (function_exists('fastcgi_finish_request')) {
+            @fastcgi_finish_request();
+        }
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+    }
+
+    /**
+     * Returns true if the response has been flushed to the client (FPM only).
+     * Used to pick longer or shorter timeouts.
+     */
+    private static function isClientDetached()
+    {
+        return self::$responseFinished && function_exists('fastcgi_finish_request');
     }
 
     public static function flushQueue()
@@ -87,70 +114,90 @@ class FullmetrixWebhookSender
             return;
         }
 
-        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
-        if (empty($secret) || empty($code)) {
-            return;
-        }
+        self::finishResponse();
 
-        $exporter = new FullmetrixStreamExporter(self::$idShop, self::$link);
-        $apiUrl = str_replace('/api/plugin', '/api/webhooks/ecommerce', FullmetrixConnector::getApiBase());
-
-        // Build summary for logging
-        $webhookSummary = [];
-        foreach (self::$queue as $entry) {
-            $t = $entry['type'];
-            $webhookSummary[$t] = isset($webhookSummary[$t]) ? $webhookSummary[$t] + 1 : 1;
-        }
-
-        foreach (self::$queue as $entry) {
-            $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
-            if ($data === null) {
-                continue;
+        try {
+            $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+            $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+            if (empty($secret) || empty($code)) {
+                self::$queue = [];
+                return;
             }
 
-            $payload = json_encode([
-                'event' => $entry['type'] . '.updated',
-                'entity_type' => $entry['type'],
-                'data' => $data,
-                'plugin_version' => FullmetrixConnector::FULLMETRIX_VERSION,
-                'timestamp' => round(microtime(true) * 1000),
-            ], JSON_UNESCAPED_UNICODE);
+            $apiUrl = str_replace('/api/plugin', '/api/webhooks/ecommerce', FullmetrixConnector::getApiBase());
 
-            if ($payload === false) {
-                continue;
-            }
+            $clientDetached = self::isClientDetached();
+            $connectTimeoutMs = $clientDetached ? 2000 : 300;
+            $totalTimeoutMs = $clientDetached ? 3000 : 800;
 
-            $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
+            $exporters = [];
+            foreach (self::$queue as $entry) {
+                try {
+                    $entryShopId = $entry['shop_id'] > 0 ? $entry['shop_id'] : self::$idShop;
+                    if (!isset($exporters[$entryShopId])) {
+                        $exporters[$entryShopId] = new FullmetrixStreamExporter($entryShopId, self::$link);
+                    }
+                    $exporter = $exporters[$entryShopId];
+                    $data = $exporter->formatSingleEntity($entry['type'], $entry['id']);
+                    if ($data === null) {
+                        continue;
+                    }
 
-            $httpHeaders = "Content-Type: application/json\r\n";
-            foreach ($headers as $name => $value) {
-                $httpHeaders .= $name . ': ' . $value . "\r\n";
-            }
+                    $payload = json_encode([
+                        'event' => $entry['type'] . '.updated',
+                        'entity_type' => $entry['type'],
+                        'data' => $data,
+                        'plugin_version' => FullmetrixConnector::FULLMETRIX_VERSION,
+                        'timestamp' => round(microtime(true) * 1000),
+                    ], JSON_UNESCAPED_UNICODE);
 
-            $context = stream_context_create([
-                'http' => [
-                    'method' => 'POST',
-                    'header' => $httpHeaders,
-                    'content' => $payload,
-                    'timeout' => 5,
-                    'ignore_errors' => true,
-                ],
-                'ssl' => [
-                    'verify_peer' => true,
-                ],
-            ]);
+                    if ($payload === false) {
+                        continue;
+                    }
 
-            // Send with 1 retry on failure
-            $result = file_get_contents($apiUrl, false, $context);
-            if ($result === false) {
-                usleep(500000); // 500ms backoff
-                $retry = file_get_contents($apiUrl, false, $context);
-                if ($retry === false) {
+                    $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
+                    self::curlPost($apiUrl, $payload, $headers, $connectTimeoutMs, $totalTimeoutMs);
+                } catch (\Throwable $e) {
+                    FullmetrixLogger::logException('webhookSender_entity', $e);
                 }
             }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('webhookSender_flushQueue', $e);
         }
 
         self::$queue = [];
+    }
+
+    /**
+     * Fire-and-forget HTTP POST with strict DNS + connect + total timeouts.
+     */
+    private static function curlPost($url, $body, $signedHeaders, $connectTimeoutMs, $totalTimeoutMs)
+    {
+        if (!function_exists('curl_init')) {
+            return;
+        }
+
+        $headerLines = ['Content-Type: application/json'];
+        foreach ($signedHeaders as $name => $value) {
+            $headerLines[] = $name . ': ' . $value;
+        }
+
+        $ch = curl_init($url);
+        if (!$ch) {
+            return;
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => $headerLines,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_NOSIGNAL => 1,
+            CURLOPT_CONNECTTIMEOUT_MS => (int) $connectTimeoutMs,
+            CURLOPT_TIMEOUT_MS => (int) $totalTimeoutMs,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+        ]);
+        @curl_exec($ch);
+        @curl_close($ch);
     }
 }

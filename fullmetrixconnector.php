@@ -20,22 +20,72 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.4.0';
+    const FULLMETRIX_VERSION = '1.5.0';
+
+    /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
+    private static $configCache = [];
+
+    /** @var array<string, mixed>|false|null Cached plugin config for the current request */
+    private static $cachedConfigThisRequest = false;
+
+    /** @var array<int, array{endpoint: string, body: string, headers: array<int, string>}> */
+    private static $pendingConsents = [];
+
+    /** @var bool */
+    private static $consentShutdownRegistered = false;
+
+    /**
+     * Read a Configuration value with per-request memoisation.
+     */
+    public static function getConfig($key)
+    {
+        if (!array_key_exists($key, self::$configCache)) {
+            self::$configCache[$key] = Configuration::get($key);
+        }
+
+        return self::$configCache[$key];
+    }
+
+    /**
+     * Invalidate the in-memory Configuration cache (called from admin handlers
+     * that change connection state during the same request).
+     */
+    public static function clearConfigCache()
+    {
+        self::$configCache = [];
+        self::$cachedConfigThisRequest = false;
+    }
 
     public static function getApiBase()
     {
-        $custom = Configuration::get('FULLMETRIX_API_BASE');
+        $custom = self::getConfig('FULLMETRIX_API_BASE');
+
         return $custom ?: self::FULLMETRIX_API_BASE;
+    }
+
+    /**
+     * Returns true when the plugin is fully configured and active.
+     * All frontend hooks should early-return when this is false.
+     */
+    public static function isActive()
+    {
+        if (!self::getConfig('FULLMETRIX_REGISTERED')) {
+            return false;
+        }
+        $code = self::getConfig('FULLMETRIX_CONNECTION_CODE');
+        $secret = self::getConfig('FULLMETRIX_CONNECTION_SECRET');
+
+        return !empty($code) && !empty($secret);
     }
 
     public function __construct()
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.0.1';
+        $this->version = '1.5.0';
         $this->author = 'Fullmetrix';
         $this->need_instance = 0;
-        $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => '8.99.99'];
+        $this->ps_versions_compliancy = ['min' => '1.7.4.0', 'max' => '8.99.99'];
         $this->bootstrap = true;
 
         parent::__construct();
@@ -44,12 +94,16 @@ class FullmetrixConnector extends Module
         $this->description = $this->l('Connect your PrestaShop store to Fullmetrix to sync your orders.');
         $this->confirmUninstall = $this->l('Are you sure you want to uninstall the Fullmetrix module?');
 
-        $context = Context::getContext();
-        $shopId = ($context && $context->shop) ? (int) $context->shop->id : 1;
-        $link = ($context) ? $context->link : null;
+        try {
+            $context = Context::getContext();
+            $shopId = ($context && $context->shop) ? (int) $context->shop->id : 1;
+            $link = ($context) ? $context->link : null;
 
-        FullmetrixWebhookSender::init($shopId, $link);
-        FullmetrixTrackingSender::init();
+            FullmetrixWebhookSender::init($shopId, $link);
+            FullmetrixTrackingSender::init();
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('module_construct', $e);
+        }
     }
 
     public function install()
@@ -90,7 +144,8 @@ class FullmetrixConnector extends Module
             && Configuration::deleteByName('FULLMETRIX_LAST_SYNC')
             && Configuration::deleteByName('FULLMETRIX_EXPORT_COUNT')
             && Configuration::deleteByName('FULLMETRIX_SYNC_IN_PROGRESS')
-            && Configuration::deleteByName('FULLMETRIX_LOGS');
+            && Configuration::deleteByName('FULLMETRIX_LOGS')
+            && Configuration::deleteByName('FULLMETRIX_PLUGIN_CONFIG');
     }
 
     public function hookDisplayBackOfficeHeader()
@@ -106,80 +161,113 @@ class FullmetrixConnector extends Module
         }
         self::$cartRebuildDone = true;
 
-        $payload = Tools::getValue('fm_cart');
-        $signature = Tools::getValue('fm_cart_sig');
+        try {
+            $payload = Tools::getValue('fm_cart');
+            $signature = Tools::getValue('fm_cart_sig');
 
-        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
-        if (empty($secret) || !hash_equals(hash_hmac('sha256', $payload, $secret), $signature)) {
-            return;
-        }
-
-        $json = base64_decode(strtr($payload, '-_', '+/'));
-        if (!is_string($json) || empty($json)) {
-            return;
-        }
-
-        $data = json_decode($json, true);
-        if (!is_array($data) || empty($data['items']) || !is_array($data['items'])) {
-            return;
-        }
-
-        $context = Context::getContext();
-        if (!$context || !$context->language || !$context->currency) {
-            return;
-        }
-
-        $cart = $context->cart;
-        if (!$cart || !Validate::isLoadedObject($cart)) {
-            $cart = new Cart();
-            $cart->id_lang = (int) $context->language->id;
-            $cart->id_currency = (int) $context->currency->id;
-            if ($context->customer && $context->customer->id) {
-                $cart->id_customer = (int) $context->customer->id;
-                $addressId = (int) Address::getFirstCustomerAddressId($context->customer->id);
-                $cart->id_address_delivery = $addressId > 0 ? $addressId : 0;
+            if (!is_string($payload) || !is_string($signature)) {
+                return;
             }
-            $cart->add();
-            $context->cart = $cart;
-            $context->cookie->__set('id_cart', (int) $cart->id);
-        }
 
-        // Clear existing cart
-        foreach ($cart->getProducts() as $product) {
-            $cart->deleteProduct(
-                (int) $product['id_product'],
-                (int) $product['id_product_attribute']
-            );
-        }
-
-        // Add items from recovery payload
-        foreach ($data['items'] as $item) {
-            $productId = isset($item['id']) ? (int) $item['id'] : 0;
-            $variationId = isset($item['v']) ? (int) $item['v'] : 0;
-            $quantity = isset($item['q']) ? max(1, (int) $item['q']) : 1;
-
-            if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
-                $cart->updateQty($quantity, $productId, $variationId);
+            $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+            if (empty($secret) || !hash_equals(hash_hmac('sha256', $payload, $secret), $signature)) {
+                return;
             }
-        }
 
-        // Apply coupons
-        if (!empty($data['c']) && is_array($data['c'])) {
-            foreach ($data['c'] as $couponCode) {
-                $couponCode = pSQL(trim($couponCode));
-                if (!preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $couponCode)) {
-                    continue;
+            $json = base64_decode(strtr($payload, '-_', '+/'));
+            if (!is_string($json) || empty($json)) {
+                return;
+            }
+
+            $data = json_decode($json, true);
+            if (!is_array($data) || empty($data['items']) || !is_array($data['items'])) {
+                return;
+            }
+
+            $context = Context::getContext();
+            if (!$context || !$context->language || !$context->currency || !$context->link) {
+                return;
+            }
+
+            $cart = $context->cart;
+            if (!$cart || !Validate::isLoadedObject($cart)) {
+                $cart = new Cart();
+                $cart->id_lang = (int) $context->language->id;
+                $cart->id_currency = (int) $context->currency->id;
+                if ($context->customer && $context->customer->id) {
+                    $cart->id_customer = (int) $context->customer->id;
+                    $addressId = (int) Address::getFirstCustomerAddressId($context->customer->id);
+                    $cart->id_address_delivery = $addressId > 0 ? $addressId : 0;
                 }
-                $cartRuleId = (int) CartRule::getIdByCode($couponCode);
-                if ($cartRuleId > 0) {
-                    $cart->addCartRule($cartRuleId);
+                if (!$cart->add()) {
+                    return;
+                }
+                $context->cart = $cart;
+                if ($context->cookie) {
+                    $context->cookie->__set('id_cart', (int) $cart->id);
                 }
             }
-        }
 
-        // Redirect to cart — Tools::redirect sends header, must exit explicitly
-        Tools::redirect($context->link->getPageLink('cart', true, null, ['action' => 'show']));
-        exit;
+            $existingProducts = $cart->getProducts();
+            if (is_array($existingProducts)) {
+                foreach ($existingProducts as $product) {
+                    try {
+                        $cart->deleteProduct(
+                            (int) $product['id_product'],
+                            (int) $product['id_product_attribute']
+                        );
+                    } catch (\Throwable $e) {
+                        // Continue clearing other items
+                    }
+                }
+            }
+
+            foreach ($data['items'] as $item) {
+                try {
+                    $productId = isset($item['id']) ? (int) $item['id'] : 0;
+                    $variationId = isset($item['v']) ? (int) $item['v'] : 0;
+                    $quantity = isset($item['q']) ? max(1, (int) $item['q']) : 1;
+
+                    if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
+                        $cart->updateQty($quantity, $productId, $variationId);
+                    }
+                } catch (\Throwable $e) {
+                    // Skip this item
+                }
+            }
+
+            if (!empty($data['c']) && is_array($data['c'])) {
+                foreach ($data['c'] as $couponCode) {
+                    try {
+                        if (!is_string($couponCode)) {
+                            continue;
+                        }
+                        $couponCode = trim($couponCode);
+                        if (!preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $couponCode)) {
+                            continue;
+                        }
+                        $cartRuleId = (int) CartRule::getIdByCode($couponCode);
+                        if ($cartRuleId > 0) {
+                            $cart->addCartRule($cartRuleId);
+                        }
+                    } catch (\Throwable $e) {
+                        // Skip this coupon
+                    }
+                }
+            }
+
+            if (headers_sent()) {
+                return;
+            }
+
+            $cartUrl = $context->link->getPageLink('cart', true, null, ['action' => 'show']);
+            if (is_string($cartUrl) && $cartUrl !== '') {
+                Tools::redirect($cartUrl);
+                exit;
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('maybeRebuildCart', $e);
+        }
     }
 
     /**
@@ -187,115 +275,140 @@ class FullmetrixConnector extends Module
      */
     private function getCachedConfig()
     {
-        $cacheKey = 'fullmetrix_plugin_config';
-        $cached = Configuration::get($cacheKey);
-        if ($cached) {
-            $data = json_decode($cached, true);
-            if (is_array($data) && isset($data['_ts']) && (time() - $data['_ts']) < 300) {
-                return $data;
+        if (self::$cachedConfigThisRequest !== false) {
+            return self::$cachedConfigThisRequest;
+        }
+
+        try {
+            $cacheKey = 'FULLMETRIX_PLUGIN_CONFIG';
+            $cached = self::getConfig($cacheKey);
+            $cachedData = null;
+            if ($cached) {
+                $cachedData = json_decode($cached, true);
+                if (is_array($cachedData) && isset($cachedData['_ts']) && (time() - $cachedData['_ts']) < 1800) {
+                    self::$cachedConfigThisRequest = $cachedData;
+                    return $cachedData;
+                }
             }
-        }
 
-        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
-        if (empty($secret) || empty($code)) {
+            $secret = self::getConfig('FULLMETRIX_CONNECTION_SECRET');
+            $code = self::getConfig('FULLMETRIX_CONNECTION_CODE');
+            if (empty($secret) || empty($code)) {
+                self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+                return self::$cachedConfigThisRequest;
+            }
+
+            $clientDetached = function_exists('fastcgi_finish_request');
+            $connectTimeoutMs = $clientDetached ? 1000 : 300;
+            $totalTimeoutMs = $clientDetached ? 2000 : 800;
+
+            $apiBase = self::getConfig('FULLMETRIX_API_BASE');
+            if (empty($apiBase)) {
+                $apiBase = 'https://fullmetrix.com/api/plugin';
+            }
+
+            $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, '');
+
+            $ch = curl_init($apiBase . '/config');
+            if (!$ch) {
+                self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+                return self::$cachedConfigThisRequest;
+            }
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT_MS => $connectTimeoutMs,
+                CURLOPT_TIMEOUT_MS => $totalTimeoutMs,
+                CURLOPT_NOSIGNAL => 1,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_HTTPHEADER => [
+                    'X-Fullmetrix-Connection-Code: ' . $headers['X-Fullmetrix-Connection-Code'],
+                    'X-Fullmetrix-Signature: ' . $headers['X-Fullmetrix-Signature'],
+                    'X-Fullmetrix-Timestamp: ' . $headers['X-Fullmetrix-Timestamp'],
+                    'X-Fullmetrix-Plugin-Version: ' . self::FULLMETRIX_VERSION,
+                ],
+            ]);
+            $body = @curl_exec($ch);
+            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200 || empty($body)) {
+                self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+                return self::$cachedConfigThisRequest;
+            }
+
+            $config = json_decode($body, true);
+            if (!is_array($config)) {
+                self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+                return self::$cachedConfigThisRequest;
+            }
+
+            $config['_ts'] = time();
+            Configuration::updateValue($cacheKey, json_encode($config), false, 0, 0);
+            self::$configCache[$cacheKey] = json_encode($config);
+            self::$cachedConfigThisRequest = $config;
+
+            return $config;
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('getCachedConfig', $e);
+            self::$cachedConfigThisRequest = null;
             return null;
         }
-
-        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
-        if (empty($apiBase)) {
-            $apiBase = 'https://fullmetrix.com/api/plugin';
-        }
-
-        $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, '');
-
-        $ch = curl_init($apiBase . '/config');
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 5,
-            CURLOPT_HTTPHEADER => [
-                'X-Fullmetrix-Connection-Code: ' . $headers['X-Fullmetrix-Connection-Code'],
-                'X-Fullmetrix-Signature: ' . $headers['X-Fullmetrix-Signature'],
-                'X-Fullmetrix-Timestamp: ' . $headers['X-Fullmetrix-Timestamp'],
-                'X-Fullmetrix-Plugin-Version: ' . self::FULLMETRIX_VERSION,
-            ],
-        ]);
-        $body = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200 || empty($body)) {
-            return null;
-        }
-
-        $config = json_decode($body, true);
-        if (!is_array($config)) {
-            return null;
-        }
-
-        $config['_ts'] = time();
-        Configuration::updateValue($cacheKey, json_encode($config), false, 0, 0);
-
-        return $config;
     }
 
     public function hookDisplayHeader()
     {
-        // Handle cart recovery URL
-        $this->maybeRebuildCart();
+        try {
+            $this->maybeRebuildCart();
 
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
-        $registered = Configuration::get('FULLMETRIX_REGISTERED');
+            if (!self::isActive()) {
+                return '';
+            }
 
-        if (empty($code) || !$registered) {
+            $apiBase = self::getConfig('FULLMETRIX_API_BASE');
+            if (empty($apiBase)) {
+                $apiBase = 'https://fullmetrix.com/api/plugin';
+            }
+            $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
+
+            $this->context->smarty->assign([
+                'origin' => $origin,
+                'code' => self::getConfig('FULLMETRIX_CONNECTION_CODE'),
+                'version' => self::FULLMETRIX_VERSION . '.' . floor(time() / 300),
+            ]);
+
+            return $this->display(__FILE__, 'views/templates/hook/header.tpl');
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookDisplayHeader', $e);
             return '';
         }
-
-        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
-        if (empty($apiBase)) {
-            $apiBase = 'https://fullmetrix.com/api/plugin';
-        }
-        $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
-
-        $this->context->smarty->assign([
-            'origin' => $origin,
-            'code' => $code,
-            'version' => self::FULLMETRIX_VERSION . '.' . floor(time() / 300),
-        ]);
-
-        return $this->display(__FILE__, 'views/templates/hook/header.tpl');
     }
 
     public function hookDisplayFooter()
     {
-        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
-        $registered = Configuration::get('FULLMETRIX_REGISTERED');
-
-        if (empty($secret) || empty($code) || !$registered) {
+        try {
+            if (!self::isActive()) {
+                return '';
+            }
+            $this->getCachedConfig();
+            return '';
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookDisplayFooter', $e);
             return '';
         }
-
-        $config = $this->getCachedConfig();
-        if (!$config) {
-            return '';
-        }
-
-        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
-        if (empty($apiBase)) {
-            $apiBase = 'https://fullmetrix.com/api/plugin';
-        }
-        $origin = rtrim(str_replace('/api/plugin', '', $apiBase), '/');
-
-        // Widget + forms loader is auto-loaded by the tracker script (t.js)
-        return '';
     }
 
     // ─── Webhook hook handlers ────────────────────────────────────────
 
     public function hookActionValidateOrder($params)
     {
-        if (isset($params['order'])) {
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (!isset($params['order'])) {
+                return;
+            }
             $order = $params['order'];
             FullmetrixWebhookSender::enqueue('order', (int) $order->id);
 
@@ -310,142 +423,304 @@ class FullmetrixConnector extends Module
                     'customer_id' => (int) $customerObj->id,
                 ];
                 $phone = null;
-                $address = new Address((int) $order->id_address_invoice);
-                if (Validate::isLoadedObject($address)) {
-                    $phone = $address->phone_mobile ?: ($address->phone ?: null);
-                    if ($phone) {
-                        $contact['phone'] = $phone;
+                try {
+                    $address = new Address((int) $order->id_address_invoice);
+                    if (Validate::isLoadedObject($address)) {
+                        $phone = $address->phone_mobile ?: ($address->phone ?: null);
+                        if ($phone) {
+                            $contact['phone'] = $phone;
+                        }
+                        $countryIso = Country::getIsoById((int) $address->id_country);
+                        if ($countryIso) {
+                            $contact['country_code'] = $countryIso;
+                        }
                     }
-                    $countryIso = Country::getIsoById((int) $address->id_country);
-                    if ($countryIso) {
-                        $contact['country_code'] = $countryIso;
-                    }
+                } catch (\Throwable $e) {
+                    // Address lookup failed, continue with bare contact data
                 }
                 FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
 
                 $this->forwardCheckoutConsent($customerObj, $phone);
             }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionValidateOrder', $e);
         }
     }
 
     private function forwardCheckoutConsent(Customer $customer, $phone)
     {
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
-        if (empty($code)) {
+        try {
+            $code = self::getConfig('FULLMETRIX_CONNECTION_CODE');
+            $secret = self::getConfig('FULLMETRIX_CONNECTION_SECRET');
+            if (empty($code) || empty($secret)) {
+                return;
+            }
+
+            $config = $this->getCachedConfig();
+            $channels = ['email'];
+            if (is_array($config) && !empty($config['checkoutConsent']['channels']) && is_array($config['checkoutConsent']['channels'])) {
+                $channels = $config['checkoutConsent']['channels'];
+            }
+
+            $apiBase = self::getConfig('FULLMETRIX_API_BASE');
+            if (empty($apiBase)) {
+                $apiBase = self::FULLMETRIX_API_BASE;
+            }
+            $endpoint = rtrim(str_replace('/api/plugin', '', $apiBase), '/') . '/api/checkout-consent';
+
+            $pageUrl = self::buildPublicUrl();
+
+            $payload = [
+                'key' => $code,
+                'email' => (string) $customer->email,
+                'consent' => (bool) $customer->newsletter,
+                'channels' => $channels,
+                'pageUrl' => $pageUrl,
+            ];
+            if (!empty($phone)) {
+                $payload['phone'] = $phone;
+            }
+
+            $body = json_encode($payload);
+            if ($body === false) {
+                return;
+            }
+
+            $signed = FullmetrixSecurity::createSignedHeaders($secret, $code, $body);
+            $consentHeaders = [
+                'Content-Type: application/json',
+                'X-Fullmetrix-Connection-Code: ' . $signed['X-Fullmetrix-Connection-Code'],
+                'X-Fullmetrix-Signature: ' . $signed['X-Fullmetrix-Signature'],
+                'X-Fullmetrix-Timestamp: ' . $signed['X-Fullmetrix-Timestamp'],
+                'X-Fullmetrix-Plugin-Version: ' . self::FULLMETRIX_VERSION,
+            ];
+
+            self::$pendingConsents[] = [
+                'endpoint' => $endpoint,
+                'body' => $body,
+                'headers' => $consentHeaders,
+            ];
+
+            if (!self::$consentShutdownRegistered) {
+                register_shutdown_function([__CLASS__, 'flushPendingConsents']);
+                self::$consentShutdownRegistered = true;
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('forwardCheckoutConsent', $e);
+        }
+    }
+
+    /**
+     * Shutdown handler that posts all queued checkout consents.
+     * Registered once per request even if forwardCheckoutConsent fires multiple times.
+     */
+    public static function flushPendingConsents()
+    {
+        if (empty(self::$pendingConsents)) {
             return;
         }
 
-        $config = $this->getCachedConfig();
-        $channels = ['email'];
-        if (is_array($config) && !empty($config['checkoutConsent']['channels']) && is_array($config['checkoutConsent']['channels'])) {
-            $channels = $config['checkoutConsent']['channels'];
+        FullmetrixWebhookSender::finishResponse();
+
+        try {
+            if (!function_exists('curl_init')) {
+                self::$pendingConsents = [];
+                return;
+            }
+
+            $clientDetached = function_exists('fastcgi_finish_request');
+            $connectTimeoutMs = $clientDetached ? 1500 : 200;
+            $totalTimeoutMs = $clientDetached ? 3000 : 500;
+
+            foreach (self::$pendingConsents as $consent) {
+                try {
+                    $ch = curl_init($consent['endpoint']);
+                    if (!$ch) {
+                        continue;
+                    }
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST => true,
+                        CURLOPT_POSTFIELDS => $consent['body'],
+                        CURLOPT_CONNECTTIMEOUT_MS => $connectTimeoutMs,
+                        CURLOPT_TIMEOUT_MS => $totalTimeoutMs,
+                        CURLOPT_NOSIGNAL => 1,
+                        CURLOPT_SSL_VERIFYPEER => true,
+                        CURLOPT_FOLLOWLOCATION => false,
+                        CURLOPT_HTTPHEADER => $consent['headers'],
+                    ]);
+                    @curl_exec($ch);
+                    @curl_close($ch);
+                } catch (\Throwable $e) {
+                    // Skip this consent, keep flushing the rest
+                }
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('flushPendingConsents', $e);
         }
 
-        $apiBase = Configuration::get('FULLMETRIX_API_BASE');
-        if (empty($apiBase)) {
-            $apiBase = self::FULLMETRIX_API_BASE;
-        }
-        $endpoint = rtrim(str_replace('/api/plugin', '', $apiBase), '/') . '/api/checkout-consent';
+        self::$pendingConsents = [];
+    }
 
-        $payload = [
-            'key' => $code,
-            'email' => (string) $customer->email,
-            'consent' => (bool) $customer->newsletter,
-            'channels' => $channels,
-            'pageUrl' => Tools::getCurrentUrlProtocolPrefix() . Tools::getHttpHost() . $_SERVER['REQUEST_URI'],
-        ];
-        if (!empty($phone)) {
-            $payload['phone'] = $phone;
-        }
+    /**
+     * Build a public URL for the current request using PrestaShop's trusted
+     * shop domain (avoids exposing attacker-controlled $_SERVER['HTTP_HOST']).
+     */
+    public static function buildPublicUrl()
+    {
+        try {
+            $useSsl = function_exists('Tools::usingSecureMode') ? Tools::usingSecureMode() : false;
+            $domain = method_exists('Tools', 'getShopDomainSsl')
+                ? Tools::getShopDomainSsl()
+                : (method_exists('Tools', 'getShopDomain') ? Tools::getShopDomain() : '');
+            if (!$domain) {
+                return '';
+            }
+            $scheme = $useSsl ? 'https://' : 'http://';
+            $uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
+            $uri = substr($uri, 0, 2048);
 
-        $body = json_encode($payload);
-        if ($body === false) {
-            return;
+            return $scheme . $domain . $uri;
+        } catch (\Throwable $e) {
+            return '';
         }
-
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $body,
-            CURLOPT_TIMEOUT => 3,
-            CURLOPT_CONNECTTIMEOUT => 2,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-        ]);
-        curl_exec($ch);
-        curl_close($ch);
     }
 
     public function hookActionOrderStatusUpdate($params)
     {
-        if (isset($params['id_order'])) {
-            FullmetrixWebhookSender::enqueue('order', (int) $params['id_order']);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['id_order'])) {
+                FullmetrixWebhookSender::enqueue('order', (int) $params['id_order']);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionOrderStatusUpdate', $e);
         }
     }
 
     public function hookActionCustomerAccountUpdate($params)
     {
-        if (isset($params['customer'])) {
-            FullmetrixWebhookSender::enqueue('customer', (int) $params['customer']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['customer']) && is_object($params['customer'])) {
+                FullmetrixWebhookSender::enqueue('customer', (int) $params['customer']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionCustomerAccountUpdate', $e);
         }
     }
 
     public function hookActionObjectCustomerUpdateAfter($params)
     {
-        if (isset($params['object'])) {
-            FullmetrixWebhookSender::enqueue('customer', (int) $params['object']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['object']) && is_object($params['object'])) {
+                FullmetrixWebhookSender::enqueue('customer', (int) $params['object']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionObjectCustomerUpdateAfter', $e);
         }
     }
 
     public function hookActionProductUpdate($params)
     {
-        if (isset($params['id_product'])) {
-            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
-        } elseif (isset($params['product'])) {
-            FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['id_product'])) {
+                FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+            } elseif (isset($params['product']) && is_object($params['product'])) {
+                FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionProductUpdate', $e);
         }
     }
 
     public function hookActionProductAdd($params)
     {
-        if (isset($params['id_product'])) {
-            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
-        } elseif (isset($params['product'])) {
-            FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['id_product'])) {
+                FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+            } elseif (isset($params['product']) && is_object($params['product'])) {
+                FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionProductAdd', $e);
         }
     }
 
     public function hookActionUpdateQuantity($params)
     {
-        if (isset($params['id_product'])) {
-            FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['id_product'])) {
+                FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionUpdateQuantity', $e);
         }
     }
 
     public function hookActionObjectCartRuleUpdateAfter($params)
     {
-        if (isset($params['object'])) {
-            FullmetrixWebhookSender::enqueue('coupon', (int) $params['object']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['object']) && is_object($params['object'])) {
+                FullmetrixWebhookSender::enqueue('coupon', (int) $params['object']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionObjectCartRuleUpdateAfter', $e);
         }
     }
 
     public function hookActionOrderSlipAdd($params)
     {
-        if (isset($params['order'])) {
-            // Get the latest slip for this order
-            $orderId = (int) $params['order']->id;
-            $sql = 'SELECT MAX(id_order_slip) FROM ' . _DB_PREFIX_ . 'order_slip WHERE id_order = ' . $orderId;
-            $slipId = (int) Db::getInstance()->getValue($sql);
-            if ($slipId > 0) {
-                FullmetrixWebhookSender::enqueue('refund', $slipId);
+        try {
+            if (!self::isActive()) {
+                return;
             }
+            if (isset($params['order']) && is_object($params['order'])) {
+                $orderId = (int) $params['order']->id;
+                if ($orderId <= 0) {
+                    return;
+                }
+                $sql = 'SELECT MAX(id_order_slip) FROM ' . _DB_PREFIX_ . 'order_slip WHERE id_order = ' . $orderId;
+                $slipId = (int) Db::getInstance()->getValue($sql);
+                if ($slipId > 0) {
+                    FullmetrixWebhookSender::enqueue('refund', $slipId);
+                }
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionOrderSlipAdd', $e);
         }
     }
 
     public function hookActionCategoryUpdate($params)
     {
-        if (isset($params['category'])) {
-            FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            if (isset($params['category']) && is_object($params['category'])) {
+                FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
+            }
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionCategoryUpdate', $e);
         }
     }
 
@@ -453,121 +728,246 @@ class FullmetrixConnector extends Module
 
     public function hookActionCartSave($params)
     {
-        $cart = isset($params['cart']) ? $params['cart'] : null;
-        if (!$cart || !($cart instanceof Cart) || !$cart->id) {
-            return;
-        }
+        try {
+            if (!self::isActive()) {
+                return;
+            }
+            $cart = isset($params['cart']) ? $params['cart'] : null;
+            if (!$cart || !($cart instanceof Cart) || !$cart->id) {
+                return;
+            }
 
-        $products = $cart->getProducts();
-        if (empty($products)) {
-            return;
-        }
+            try {
+                if (method_exists($cart, 'orderExists') && $cart->orderExists()) {
+                    return;
+                }
+            } catch (\Throwable $e) {
+                // If orderExists check fails, continue with cart_updated emit
+            }
 
-        $context = Context::getContext();
-        $items = [];
-        foreach ($products as $p) {
-            $imageUrl = null;
-            if (!empty($p['id_image'])) {
-                $imageUrl = $context->link->getImageLink(
-                    isset($p['link_rewrite']) ? $p['link_rewrite'] : '',
-                    $p['id_image'],
-                    'home_default'
-                );
-                if ($imageUrl && strpos($imageUrl, 'http') !== 0) {
-                    $imageUrl = 'https://' . $imageUrl;
+            $products = $cart->getProducts();
+            if (empty($products) || !is_array($products)) {
+                return;
+            }
+
+            $context = Context::getContext();
+            if (!$context) {
+                return;
+            }
+
+            $link = $context->link;
+            $items = [];
+            foreach ($products as $p) {
+                $imageUrl = null;
+                if ($link && !empty($p['id_image'])) {
+                    try {
+                        $imageUrl = $link->getImageLink(
+                            isset($p['link_rewrite']) ? $p['link_rewrite'] : '',
+                            $p['id_image'],
+                            'home_default'
+                        );
+                        if ($imageUrl && strpos($imageUrl, 'http') !== 0) {
+                            $imageUrl = 'https://' . $imageUrl;
+                        }
+                    } catch (\Throwable $e) {
+                        $imageUrl = null;
+                    }
+                }
+
+                $productUrl = null;
+                if ($link) {
+                    try {
+                        $productUrl = $link->getProductLink((int) $p['id_product']);
+                    } catch (\Throwable $e) {
+                        $productUrl = null;
+                    }
+                }
+
+                $items[] = [
+                    'product_id' => (int) $p['id_product'],
+                    'variation_id' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : null,
+                    'name' => isset($p['name']) ? $p['name'] : '',
+                    'quantity' => isset($p['cart_quantity']) ? (int) $p['cart_quantity'] : 0,
+                    'price' => isset($p['price_wt']) ? (float) $p['price_wt'] : 0.0,
+                    'line_total' => isset($p['total_wt']) ? (float) $p['total_wt'] : 0.0,
+                    'sku' => !empty($p['reference']) ? $p['reference'] : null,
+                    'image_url' => $imageUrl,
+                    'url' => $productUrl,
+                ];
+            }
+
+            $total = 0.0;
+            $subtotal = 0.0;
+            $discountTotal = 0.0;
+            $shippingTotal = 0.0;
+            $taxTotal = 0.0;
+            try {
+                $totalWithTax = (float) $cart->getOrderTotal(true, Cart::BOTH);
+                $totalNoTax = (float) $cart->getOrderTotal(false, Cart::BOTH);
+                $total = $totalWithTax;
+                $subtotal = (float) $cart->getOrderTotal(true, Cart::ONLY_PRODUCTS);
+                $discountTotal = abs((float) $cart->getOrderTotal(true, Cart::ONLY_DISCOUNTS));
+                $shippingTotal = (float) $cart->getOrderTotal(true, Cart::ONLY_SHIPPING);
+                $taxTotal = $totalWithTax - $totalNoTax;
+            } catch (\Throwable $e) {
+                // Totals fail when no address/carrier is set (guest visitors).
+                // Fall back to summed line totals so we still have a usable snapshot.
+                foreach ($items as $i) {
+                    $subtotal += (float) $i['line_total'];
+                }
+                $total = $subtotal;
+            }
+
+            $couponCodes = [];
+            try {
+                $rules = $cart->getCartRules();
+                if (is_array($rules)) {
+                    foreach ($rules as $r) {
+                        if (isset($r['name'])) {
+                            $couponCodes[] = $r['name'];
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $couponCodes = [];
+            }
+
+            $recoveryUrl = null;
+            try {
+                $recoveryUrl = $this->buildCartRecoveryUrl($cart);
+            } catch (\Throwable $e) {
+                $recoveryUrl = null;
+            }
+
+            $itemCount = 0;
+            try {
+                $itemCount = (int) $cart->nbProducts();
+            } catch (\Throwable $e) {
+                foreach ($items as $i) {
+                    $itemCount += (int) $i['quantity'];
                 }
             }
 
-            $items[] = [
-                'product_id' => (int) $p['id_product'],
-                'variation_id' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : null,
-                'name' => $p['name'],
-                'quantity' => (int) $p['cart_quantity'],
-                'price' => (float) $p['price_wt'],
-                'line_total' => (float) $p['total_wt'],
-                'sku' => !empty($p['reference']) ? $p['reference'] : null,
-                'image_url' => $imageUrl,
-                'url' => $context->link->getProductLink((int) $p['id_product']),
+            $cartSnapshot = [
+                'currency' => $context->currency ? $context->currency->iso_code : 'EUR',
+                'total' => $total,
+                'subtotal' => $subtotal,
+                'discount_total' => $discountTotal,
+                'shipping_total' => $shippingTotal,
+                'tax_total' => $taxTotal,
+                'coupon_codes' => $couponCodes,
+                'item_count' => $itemCount,
+                'items' => $items,
+                'recovery_url' => $recoveryUrl,
             ];
+
+            FullmetrixTrackingSender::enqueueEvent('cart_updated', [
+                'cart' => $cartSnapshot,
+                'source' => 'server',
+            ]);
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionCartSave', $e);
         }
-
-        $recoveryUrl = $this->buildCartRecoveryUrl($cart);
-
-        $cartSnapshot = [
-            'currency' => $context->currency ? $context->currency->iso_code : 'EUR',
-            'total' => (float) $cart->getOrderTotal(true, Cart::BOTH),
-            'subtotal' => (float) $cart->getOrderTotal(true, Cart::ONLY_PRODUCTS),
-            'discount_total' => abs((float) $cart->getOrderTotal(true, Cart::ONLY_DISCOUNTS)),
-            'shipping_total' => (float) $cart->getOrderTotal(true, Cart::ONLY_SHIPPING),
-            'tax_total' => (float) ($cart->getOrderTotal(true) - $cart->getOrderTotal(false)),
-            'coupon_codes' => array_map(function ($r) { return $r['name']; }, $cart->getCartRules()),
-            'item_count' => (int) $cart->nbProducts(),
-            'items' => $items,
-            'recovery_url' => $recoveryUrl,
-        ];
-
-        FullmetrixTrackingSender::enqueueEvent('cart_updated', [
-            'cart' => $cartSnapshot,
-            'source' => 'server',
-        ]);
     }
 
     public function hookActionAuthentication($params)
     {
-        $customer = isset($params['customer']) && $params['customer'] instanceof Customer
-            ? $params['customer']
-            : null;
-        if (!$customer || !Validate::isLoadedObject($customer) || empty($customer->email)) {
-            return;
-        }
-
-        $contact = [
-            'email' => $customer->email,
-            'first_name' => $customer->firstname ?: null,
-            'last_name' => $customer->lastname ?: null,
-            'customer_id' => (int) $customer->id,
-        ];
-
-        $addressId = (int) Address::getFirstCustomerAddressId($customer->id);
-        if ($addressId > 0) {
-            $address = new Address($addressId);
-            if (Validate::isLoadedObject($address)) {
-                $phone = $address->phone_mobile ?: ($address->phone ?: null);
-                if ($phone) {
-                    $contact['phone'] = $phone;
-                }
+        try {
+            if (!self::isActive()) {
+                return;
             }
-        }
+            $customer = isset($params['customer']) && $params['customer'] instanceof Customer
+                ? $params['customer']
+                : null;
+            if (!$customer || !Validate::isLoadedObject($customer) || empty($customer->email)) {
+                return;
+            }
 
-        FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
+            $contact = [
+                'email' => $customer->email,
+                'first_name' => $customer->firstname ?: null,
+                'last_name' => $customer->lastname ?: null,
+                'customer_id' => (int) $customer->id,
+            ];
+
+            try {
+                $addressId = (int) Address::getFirstCustomerAddressId($customer->id);
+                if ($addressId > 0) {
+                    $address = new Address($addressId);
+                    if (Validate::isLoadedObject($address)) {
+                        $phone = $address->phone_mobile ?: ($address->phone ?: null);
+                        if ($phone) {
+                            $contact['phone'] = $phone;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Address lookup failed, continue with bare contact data
+            }
+
+            FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('hookActionAuthentication', $e);
+        }
     }
 
     private function buildCartRecoveryUrl(Cart $cart)
     {
-        $products = $cart->getProducts();
-        if (empty($products)) {
+        try {
+            $products = $cart->getProducts();
+            if (empty($products) || !is_array($products)) {
+                return null;
+            }
+
+            $itemsData = [];
+            foreach ($products as $p) {
+                $itemsData[] = [
+                    'id' => (int) $p['id_product'],
+                    'v' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : 0,
+                    'q' => isset($p['cart_quantity']) ? (int) $p['cart_quantity'] : 1,
+                ];
+            }
+
+            $coupons = [];
+            try {
+                $rules = $cart->getCartRules();
+                if (is_array($rules)) {
+                    foreach ($rules as $r) {
+                        if (isset($r['name'])) {
+                            $coupons[] = $r['name'];
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $coupons = [];
+            }
+
+            $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
+            if (empty($secret)) {
+                return null;
+            }
+
+            $payloadJson = json_encode(['items' => $itemsData, 'c' => $coupons]);
+            if ($payloadJson === false) {
+                return null;
+            }
+            $encoded = strtr(base64_encode($payloadJson), '+/', '-_');
+            $signature = hash_hmac('sha256', $encoded, $secret);
+
+            $context = Context::getContext();
+            if (!$context || !$context->link) {
+                return null;
+            }
+            $baseUrl = $context->link->getPageLink('cart', true);
+            if (!is_string($baseUrl) || $baseUrl === '') {
+                return null;
+            }
+            $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
+            return $baseUrl . $separator . 'fm_cart=' . $encoded . '&fm_cart_sig=' . $signature;
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('buildCartRecoveryUrl', $e);
             return null;
         }
-
-        $itemsData = [];
-        foreach ($products as $p) {
-            $itemsData[] = [
-                'id' => (int) $p['id_product'],
-                'v' => !empty($p['id_product_attribute']) ? (int) $p['id_product_attribute'] : 0,
-                'q' => (int) $p['cart_quantity'],
-            ];
-        }
-
-        $coupons = array_map(function ($r) { return $r['name']; }, $cart->getCartRules());
-        $payload = ['items' => $itemsData, 'c' => $coupons];
-        $encoded = strtr(base64_encode(json_encode($payload)), '+/', '-_');
-        $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
-        $signature = hash_hmac('sha256', $encoded, $secret);
-
-        $context = Context::getContext();
-        $baseUrl = $context->link->getPageLink('cart', true);
-        $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
-        return $baseUrl . $separator . 'fm_cart=' . $encoded . '&fm_cart_sig=' . $signature;
     }
 
     // ─── Admin content ───────────────────────────────────────────────
@@ -585,8 +985,10 @@ class FullmetrixConnector extends Module
                 $output .= $this->displayError($this->l('Invalid code format. The code must be in FMTX-XXXX-XXXX-XXXX format.'));
             } else {
                 Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', $connectionCode);
+                self::clearConfigCache();
 
                 $result = $this->registerWithFullmetrix();
+                self::clearConfigCache();
 
                 if ($result === true) {
                     $output .= $this->displayConfirmation($this->l('Connection successful! Your store is now connected to Fullmetrix.'));
@@ -604,10 +1006,13 @@ class FullmetrixConnector extends Module
             Configuration::updateValue('FULLMETRIX_LAST_SYNC', '');
             Configuration::updateValue('FULLMETRIX_EXPORT_COUNT', 0);
             Configuration::updateValue('FULLMETRIX_SYNC_IN_PROGRESS', '');
+            Configuration::deleteByName('FULLMETRIX_PLUGIN_CONFIG');
+            self::clearConfigCache();
             $output .= $this->displayConfirmation($this->l('Successfully disconnected.'));
         }
 
         if (Tools::isSubmit('submitFullmetrixClearLogs')) {
+            FullmetrixLogger::clear();
             $output .= $this->displayConfirmation($this->l('Logs cleared.'));
         }
 
@@ -843,6 +1248,8 @@ class FullmetrixConnector extends Module
             'sync_error' => 'Error',
             'webhook' => 'Webhook',
         ];
+
+        $rawLogs = FullmetrixLogger::getLogs();
 
         $logs = [];
         foreach ($rawLogs as $log) {
