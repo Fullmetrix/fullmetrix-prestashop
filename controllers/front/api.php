@@ -12,6 +12,8 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 {
+    const MAX_REQUEST_BODY_BYTES = 1048576;
+
     public $ssl = true;
     public $ajax = true;
     public $content_only = true;
@@ -19,6 +21,9 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     public $display_footer = false;
     public $display_column_left = false;
     public $display_column_right = false;
+
+    private $cachedRequestBody;
+    private $cachedRequestBodyRead = false;
 
     public function init()
     {
@@ -62,7 +67,9 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
             $this->handleExport();
         } catch (\Throwable $e) {
-            $this->sendJsonError('Server error: ' . $e->getMessage(), 500);
+            require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
+            FullmetrixLogger::logException('api_displayAjax', $e);
+            $this->sendJsonError('Server error', 500);
         }
     }
 
@@ -112,7 +119,12 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
     private function handleCommand()
     {
-        $rawBody = file_get_contents('php://input');
+        $rawBody = $this->readRequestBody();
+        if ($rawBody === null) {
+            $this->sendJsonError('Request body too large', 413);
+
+            return;
+        }
         $body = json_decode($rawBody, true);
 
         if (!is_array($body) || empty($body['action'])) {
@@ -354,8 +366,10 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixSecurity.php';
 
-        // POST commands sign the body
-        $body = file_get_contents('php://input');
+        $body = $this->readRequestBody();
+        if ($body === null) {
+            return ['error' => 'Request body too large', 'status' => 413];
+        }
         $isValid = FullmetrixSecurity::verifySignature($secret, $body, $signature, (int) $timestamp);
 
         if (!$isValid) {
@@ -640,6 +654,40 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         Configuration::updateValue('FULLMETRIX_LAST_SYNC', json_encode($stats));
+    }
+
+    private function readRequestBody()
+    {
+        if ($this->cachedRequestBodyRead) {
+            return $this->cachedRequestBody;
+        }
+        $this->cachedRequestBodyRead = true;
+
+        if (isset($_SERVER['CONTENT_LENGTH']) && (int) $_SERVER['CONTENT_LENGTH'] > self::MAX_REQUEST_BODY_BYTES) {
+            $this->cachedRequestBody = null;
+
+            return null;
+        }
+
+        $stream = @fopen('php://input', 'rb');
+        if ($stream === false) {
+            $this->cachedRequestBody = '';
+
+            return '';
+        }
+        $body = @stream_get_contents($stream, self::MAX_REQUEST_BODY_BYTES + 1);
+        @fclose($stream);
+        if (!is_string($body)) {
+            $body = '';
+        }
+        if (strlen($body) > self::MAX_REQUEST_BODY_BYTES) {
+            $this->cachedRequestBody = null;
+
+            return null;
+        }
+        $this->cachedRequestBody = $body;
+
+        return $body;
     }
 
     private function getHeader($name)

@@ -289,6 +289,10 @@ class FullmetrixConnector extends Module
                     self::$cachedConfigThisRequest = $cachedData;
                     return $cachedData;
                 }
+                if (is_array($cachedData) && isset($cachedData['_failed_at']) && (time() - $cachedData['_failed_at']) < 300) {
+                    self::$cachedConfigThisRequest = $cachedData;
+                    return $cachedData;
+                }
             }
 
             $secret = self::getConfig('FULLMETRIX_CONNECTION_SECRET');
@@ -333,12 +337,26 @@ class FullmetrixConnector extends Module
             curl_close($ch);
 
             if ($httpCode !== 200 || empty($body)) {
+                $negative = is_array($cachedData) ? $cachedData : [];
+                $negative['_failed_at'] = time();
+                $negativeJson = json_encode($negative);
+                if (is_string($negativeJson)) {
+                    Configuration::updateValue($cacheKey, $negativeJson, false, 0, 0);
+                    self::$configCache[$cacheKey] = $negativeJson;
+                }
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
                 return self::$cachedConfigThisRequest;
             }
 
             $config = json_decode($body, true);
             if (!is_array($config)) {
+                $negative = is_array($cachedData) ? $cachedData : [];
+                $negative['_failed_at'] = time();
+                $negativeJson = json_encode($negative);
+                if (is_string($negativeJson)) {
+                    Configuration::updateValue($cacheKey, $negativeJson, false, 0, 0);
+                    self::$configCache[$cacheKey] = $negativeJson;
+                }
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
                 return self::$cachedConfigThisRequest;
             }
@@ -359,11 +377,11 @@ class FullmetrixConnector extends Module
     public function hookDisplayHeader()
     {
         try {
-            $this->maybeRebuildCart();
-
             if (!self::isActive()) {
                 return '';
             }
+
+            $this->maybeRebuildCart();
 
             $apiBase = self::getConfig('FULLMETRIX_API_BASE');
             if (empty($apiBase)) {
