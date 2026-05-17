@@ -1385,7 +1385,15 @@ class FullmetrixStreamExporter
 
     private function sendLine($data)
     {
-        echo json_encode($data, JSON_UNESCAPED_UNICODE) . "\n";
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json === false) {
+            $json = json_encode([
+                'type' => 'error',
+                'reason' => 'json_encode_failed',
+                'json_error' => json_last_error_msg(),
+            ]);
+        }
+        echo $json . "\n";
         flush();
     }
 
