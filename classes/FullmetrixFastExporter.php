@@ -60,6 +60,7 @@ class FullmetrixFastExporter
                 o.total_paid_tax_excl,
                 o.total_discounts,
                 o.total_shipping,
+                o.conversion_rate,
                 o.date_add,
                 o.date_upd,
                 osl.name as status_name,
@@ -100,6 +101,7 @@ class FullmetrixFastExporter
                     'order_number' => (string) $row['reference'],
                     'status' => (string) ($row['status_name'] ?: 'unknown'),
                     'currency' => (string) ($row['currency_code'] ?: 'EUR'),
+                    'conversion_rate' => (string) (isset($row['conversion_rate']) ? (float) $row['conversion_rate'] : 1),
                     'total' => round($paidTaxIncl, 2),
                     'discount_total' => round((float) $row['total_discounts'], 2),
                     'shipping_total' => round((float) $row['total_shipping'], 2),
@@ -201,11 +203,14 @@ class FullmetrixFastExporter
                 p.reference,
                 p.price,
                 p.active,
+                p.id_supplier,
+                p.supplier_reference,
                 p.date_add,
                 p.date_upd,
                 pl.name,
                 pl.link_rewrite,
                 sa.quantity,
+                s.name as supplier_name,
                 (SELECT GROUP_CONCAT(cp.id_category) FROM {$this->prefix}category_product cp WHERE cp.id_product = p.id_product) as category_ids,
                 (SELECT COUNT(*) FROM {$this->prefix}product_attribute pa WHERE pa.id_product = p.id_product) as combination_count,
                 img.id_image
@@ -213,6 +218,7 @@ class FullmetrixFastExporter
             LEFT JOIN {$this->prefix}product_lang pl ON (p.id_product = pl.id_product AND pl.id_lang = {$this->idLang} AND pl.id_shop = {$this->idShop})
             LEFT JOIN {$this->prefix}stock_available sa ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND sa.id_shop = {$this->idShop})
             LEFT JOIN {$this->prefix}image img ON (p.id_product = img.id_product AND img.cover = 1)
+            LEFT JOIN {$this->prefix}supplier s ON (p.id_supplier = s.id_supplier)
             ORDER BY p.id_product ASC
             LIMIT {$perPage} OFFSET {$offset}
         ";
@@ -222,12 +228,16 @@ class FullmetrixFastExporter
 
         if (is_array($rows)) {
             $productIds = [];
+            $allIds = [];
             foreach ($rows as $row) {
+                $allIds[] = (int) $row['id_product'];
                 if ((int) $row['combination_count'] > 0) {
                     $productIds[] = (int) $row['id_product'];
                 }
             }
             $combinations = $this->getProductCombinations($productIds);
+            $suppliersMap = $this->getProductSuppliers($allIds);
+            $featuresMap = $this->getProductFeatures($allIds);
 
             foreach ($rows as $row) {
                 $productId = (int) $row['id_product'];
@@ -258,6 +268,11 @@ class FullmetrixFastExporter
                     'stock_status' => $quantity > 0 ? 'instock' : 'outofstock',
                     'stock_quantity' => $quantity,
                     'category_ids' => $categoryIds,
+                    'supplier_id' => (int) ($row['id_supplier'] ?? 0),
+                    'supplier_name' => (string) ($row['supplier_name'] ?? ''),
+                    'supplier_reference' => (string) ($row['supplier_reference'] ?? ''),
+                    'suppliers' => $suppliersMap[$productId] ?? [],
+                    'features' => $featuresMap[$productId] ?? [],
                     'parent_id' => null,
                     'image_url' => $imageUrl,
                     'date_created' => $row['date_add'] ? gmdate('c', strtotime($row['date_add'])) : null,
@@ -297,6 +312,83 @@ class FullmetrixFastExporter
             'meta' => $this->buildMeta($total, $page, $totalPages, $perPage),
             'products' => $products,
         ];
+    }
+
+    private function getProductSuppliers($productIds)
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $ids = implode(',', array_map('intval', $productIds));
+
+        $query = "
+            SELECT ps.id_product, ps.id_supplier, ps.id_product_attribute,
+                   ps.product_supplier_reference, ps.product_supplier_price_te,
+                   ps.id_currency, s.name AS supplier_name
+            FROM {$this->prefix}product_supplier ps
+            LEFT JOIN {$this->prefix}supplier s ON (ps.id_supplier = s.id_supplier)
+            WHERE ps.id_product IN ({$ids})
+        ";
+
+        $rows = $this->db->executeS($query);
+        $grouped = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $grouped[(int) $row['id_product']][] = [
+                    'id' => (int) $row['id_supplier'],
+                    'name' => (string) ($row['supplier_name'] ?? ''),
+                    'reference' => (string) ($row['product_supplier_reference'] ?? ''),
+                    'price_te' => (string) ($row['product_supplier_price_te'] ?? '0'),
+                    'currency_id' => (int) $row['id_currency'],
+                    'attribute_id' => (int) $row['id_product_attribute'],
+                ];
+            }
+        }
+
+        return $grouped;
+    }
+
+    private function getProductFeatures($productIds)
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $ids = implode(',', array_map('intval', $productIds));
+
+        $query = "
+            SELECT fp.id_product, fp.id_feature, fp.id_feature_value,
+                   f.position,
+                   fl.name AS feature_name,
+                   fvl.value AS feature_value
+            FROM {$this->prefix}feature_product fp
+            LEFT JOIN {$this->prefix}feature f ON (fp.id_feature = f.id_feature)
+            LEFT JOIN {$this->prefix}feature_lang fl
+                ON (fp.id_feature = fl.id_feature AND fl.id_lang = {$this->idLang})
+            LEFT JOIN {$this->prefix}feature_value_lang fvl
+                ON (fp.id_feature_value = fvl.id_feature_value AND fvl.id_lang = {$this->idLang})
+            WHERE fp.id_product IN ({$ids})
+            ORDER BY f.position ASC
+        ";
+
+        $rows = $this->db->executeS($query);
+        $grouped = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $grouped[(int) $row['id_product']][] = [
+                    'id' => (int) $row['id_feature'],
+                    'name' => (string) ($row['feature_name'] ?? ''),
+                    'value_id' => (int) $row['id_feature_value'],
+                    'value' => (string) ($row['feature_value'] ?? ''),
+                    'position' => (int) ($row['position'] ?? 0),
+                ];
+            }
+        }
+
+        return $grouped;
     }
 
     private function getProductCombinations($productIds)

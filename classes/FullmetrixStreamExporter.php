@@ -253,7 +253,8 @@ class FullmetrixStreamExporter
                        o.payment AS payment_method_title,
                        o.total_paid_tax_incl, o.total_paid_tax_excl,
                        o.total_discounts_tax_incl,
-                       o.total_shipping_tax_incl
+                       o.total_shipping_tax_incl,
+                       o.conversion_rate
                        ' . $wrappingCol . ',
                        o.total_products, o.total_products_wt,
                        o.invoice_number, o.delivery_number
@@ -332,6 +333,7 @@ class FullmetrixStreamExporter
                         'number' => (string) ($row['reference'] ?: $oid),
                         'status' => (string) ($row['status_name'] ?: 'unknown'),
                         'currency' => (string) ($row['currency_code'] ?: 'EUR'),
+                        'conversion_rate' => (string) (isset($row['conversion_rate']) ? (float) $row['conversion_rate'] : 1),
                         'total' => (string) round($totalTaxIncl, 2),
                         'discount_total' => (string) round((float) $row['total_discounts_tax_incl'], 2),
                         'shipping_total' => (string) round((float) $row['total_shipping_tax_incl'], 2),
@@ -861,16 +863,19 @@ class FullmetrixStreamExporter
                        p.active, p.weight, p.width, p.height, p.depth,
                        p.ean13, p.upc, p.isbn, p.condition, p.visibility,
                        p.id_manufacturer, p.id_tax_rules_group, p.on_sale,
+                       p.id_supplier, p.supplier_reference,
                        p.date_add, p.date_upd,
                        pl.name, pl.description, pl.description_short, pl.link_rewrite,
                        sa.quantity AS stock_quantity,
-                       m.name AS manufacturer_name
+                       m.name AS manufacturer_name,
+                       s.name AS supplier_name
                 FROM ' . $this->prefix . 'product p
                 LEFT JOIN ' . $this->prefix . 'product_lang pl
                     ON (p.id_product = pl.id_product AND pl.id_lang = ' . $this->idLang . ' AND pl.id_shop = ' . $this->idShop . ')
                 LEFT JOIN ' . $this->prefix . 'stock_available sa
                     ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND sa.id_shop = ' . $this->idShop . ')
                 LEFT JOIN ' . $this->prefix . 'manufacturer m ON (p.id_manufacturer = m.id_manufacturer)
+                LEFT JOIN ' . $this->prefix . 'supplier s ON (p.id_supplier = s.id_supplier)
                 WHERE p.id_product > ' . (int) $lastId . $sinceWhere . '
                 ORDER BY p.id_product ASC
                 LIMIT ' . $this->batchSize;
@@ -902,6 +907,8 @@ class FullmetrixStreamExporter
             $imagesMap = $this->batchLoadProductImages($productIdsList, $rewriteMap);
             $salePriceMap = $this->batchLoadSpecificPrices($productIdsList, $basePrices);
             $combosMap = $this->batchLoadCombinations($productIdsList);
+            $suppliersMap = $this->batchLoadProductSuppliers($productIdsList);
+            $featuresMap = $this->batchLoadProductFeatures($productIdsList);
 
             foreach ($rows as $row) {
                 $pid = (int) $row['id_product'];
@@ -939,6 +946,11 @@ class FullmetrixStreamExporter
                         'isbn' => (string) ($row['isbn'] ?? ''),
                         'condition' => (string) ($row['condition'] ?? 'new'),
                         'manufacturer_name' => (string) ($row['manufacturer_name'] ?? ''),
+                        'supplier_id' => (int) ($row['id_supplier'] ?? 0),
+                        'supplier_name' => (string) ($row['supplier_name'] ?? ''),
+                        'supplier_reference' => (string) ($row['supplier_reference'] ?? ''),
+                        'suppliers' => $suppliersMap[$pid] ?? [],
+                        'features' => $featuresMap[$pid] ?? [],
                         'wholesale_price' => (string) round((float) ($row['wholesale_price'] ?? 0), 2),
                         'category_ids' => $categoriesMap[$pid] ?? [],
                         'tags' => $tagsMap[$pid] ?? [],
@@ -998,7 +1010,7 @@ class FullmetrixStreamExporter
             }
 
             $lastId = (int) end($rows)['id_product'];
-            unset($rows, $categoriesMap, $tagsMap, $imagesMap, $salePriceMap, $combosMap);
+            unset($rows, $categoriesMap, $tagsMap, $imagesMap, $salePriceMap, $combosMap, $suppliersMap, $featuresMap);
             $this->adaptBatchSize();
             $this->maybeGc();
         }
@@ -1024,6 +1036,67 @@ class FullmetrixStreamExporter
         if (is_array($rows)) {
             foreach ($rows as $row) {
                 $map[(int) $row['id_product']][] = (int) $row['id_category'];
+            }
+        }
+
+        return $map;
+    }
+
+    private function batchLoadProductSuppliers($productIdsList)
+    {
+        $sql = 'SELECT ps.id_product, ps.id_supplier, ps.id_product_attribute,
+                   ps.product_supplier_reference, ps.product_supplier_price_te,
+                   ps.id_currency, s.name AS supplier_name
+            FROM ' . $this->prefix . 'product_supplier ps
+            LEFT JOIN ' . $this->prefix . 'supplier s ON (ps.id_supplier = s.id_supplier)
+            WHERE ps.id_product IN (' . $productIdsList . ')';
+
+        $rows = $this->safeQuery($sql, 'product_suppliers');
+        $map = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $map[(int) $row['id_product']][] = [
+                    'id' => (int) $row['id_supplier'],
+                    'name' => (string) ($row['supplier_name'] ?? ''),
+                    'reference' => (string) ($row['product_supplier_reference'] ?? ''),
+                    'price_te' => (string) ($row['product_supplier_price_te'] ?? '0'),
+                    'currency_id' => (int) $row['id_currency'],
+                    'attribute_id' => (int) $row['id_product_attribute'],
+                ];
+            }
+        }
+
+        return $map;
+    }
+
+    private function batchLoadProductFeatures($productIdsList)
+    {
+        $sql = 'SELECT fp.id_product, fp.id_feature, fp.id_feature_value,
+                   f.position,
+                   fl.name AS feature_name,
+                   fvl.value AS feature_value
+            FROM ' . $this->prefix . 'feature_product fp
+            LEFT JOIN ' . $this->prefix . 'feature f ON (fp.id_feature = f.id_feature)
+            LEFT JOIN ' . $this->prefix . 'feature_lang fl
+                ON (fp.id_feature = fl.id_feature AND fl.id_lang = ' . $this->idLang . ')
+            LEFT JOIN ' . $this->prefix . 'feature_value_lang fvl
+                ON (fp.id_feature_value = fvl.id_feature_value AND fvl.id_lang = ' . $this->idLang . ')
+            WHERE fp.id_product IN (' . $productIdsList . ')
+            ORDER BY f.position ASC';
+
+        $rows = $this->safeQuery($sql, 'product_features');
+        $map = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $map[(int) $row['id_product']][] = [
+                    'id' => (int) $row['id_feature'],
+                    'name' => (string) ($row['feature_name'] ?? ''),
+                    'value_id' => (int) $row['id_feature_value'],
+                    'value' => (string) ($row['feature_value'] ?? ''),
+                    'position' => (int) ($row['position'] ?? 0),
+                ];
             }
         }
 
@@ -1504,7 +1577,8 @@ class FullmetrixStreamExporter
                    o.payment AS payment_method_title,
                    o.total_paid_tax_incl, o.total_paid_tax_excl,
                    o.total_discounts_tax_incl,
-                   o.total_shipping_tax_incl
+                   o.total_shipping_tax_incl,
+                   o.conversion_rate
                    ' . $wrappingCol . ',
                    o.total_products, o.total_products_wt,
                    o.invoice_number, o.delivery_number
@@ -1549,6 +1623,7 @@ class FullmetrixStreamExporter
             'number' => (string) ($row['reference'] ?: $orderId),
             'status' => (string) ($row['status_name'] ?: 'unknown'),
             'currency' => (string) ($row['currency_code'] ?: 'EUR'),
+            'conversion_rate' => (string) (isset($row['conversion_rate']) ? (float) $row['conversion_rate'] : 1),
             'total' => (string) round($totalTaxIncl, 2),
             'discount_total' => (string) round((float) $row['total_discounts_tax_incl'], 2),
             'shipping_total' => (string) round((float) $row['total_shipping_tax_incl'], 2),
@@ -1641,14 +1716,17 @@ class FullmetrixStreamExporter
         $sql = 'SELECT p.id_product, p.reference, p.price, p.wholesale_price,
                    p.active, p.weight, p.width, p.height, p.depth,
                    p.ean13, p.upc, p.isbn, p.condition, p.visibility,
-                   p.on_sale, p.date_add, p.date_upd,
+                   p.on_sale, p.id_supplier, p.supplier_reference,
+                   p.date_add, p.date_upd,
                    pl.name, pl.description, pl.description_short, pl.link_rewrite,
-                   sa.quantity AS stock_quantity
+                   sa.quantity AS stock_quantity,
+                   s.name AS supplier_name
             FROM ' . $this->prefix . 'product p
             LEFT JOIN ' . $this->prefix . 'product_lang pl
                 ON (p.id_product = pl.id_product AND pl.id_lang = ' . $this->idLang . ' AND pl.id_shop = ' . $this->idShop . ')
             LEFT JOIN ' . $this->prefix . 'stock_available sa
                 ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND sa.id_shop = ' . $this->idShop . ')
+            LEFT JOIN ' . $this->prefix . 'supplier s ON (p.id_supplier = s.id_supplier)
             WHERE p.id_product = ' . $productId;
 
         $rows = $this->safeQuery($sql, 'single_product');
@@ -1665,6 +1743,8 @@ class FullmetrixStreamExporter
         $tagsMap = $this->batchLoadProductTags($pidList);
         $imagesMap = $this->batchLoadProductImages($pidList);
         $salePriceMap = $this->batchLoadSpecificPrices($pidList, $basePrices);
+        $suppliersMap = $this->batchLoadProductSuppliers($pidList);
+        $featuresMap = $this->batchLoadProductFeatures($pidList);
 
         $stockQty = min((int) ($row['stock_quantity'] ?? 0), 2147483647);
         $images = $imagesMap[$pid] ?? [];
@@ -1694,6 +1774,11 @@ class FullmetrixStreamExporter
             'upc' => (string) ($row['upc'] ?? ''),
             'isbn' => (string) ($row['isbn'] ?? ''),
             'condition' => (string) ($row['condition'] ?? 'new'),
+            'supplier_id' => (int) ($row['id_supplier'] ?? 0),
+            'supplier_name' => (string) ($row['supplier_name'] ?? ''),
+            'supplier_reference' => (string) ($row['supplier_reference'] ?? ''),
+            'suppliers' => $suppliersMap[$pid] ?? [],
+            'features' => $featuresMap[$pid] ?? [],
             'wholesale_price' => (string) round((float) ($row['wholesale_price'] ?? 0), 2),
             'category_ids' => $categoriesMap[$pid] ?? [],
             'tags' => $tagsMap[$pid] ?? [],
