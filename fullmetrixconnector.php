@@ -85,7 +85,7 @@ class FullmetrixConnector extends Module
         $this->version = '1.5.0';
         $this->author = 'Fullmetrix';
         $this->need_instance = 0;
-        $this->ps_versions_compliancy = ['min' => '1.7.4.0', 'max' => '8.99.99'];
+        $this->ps_versions_compliancy = ['min' => '1.7.4.0', 'max' => '9.99.99'];
         $this->bootstrap = true;
 
         parent::__construct();
