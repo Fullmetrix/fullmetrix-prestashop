@@ -21,6 +21,7 @@ class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
     const FULLMETRIX_VERSION = '1.5.0';
+    const FULLMETRIX_CHANNEL = 'community';
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
     private static $configCache = [];
@@ -84,6 +85,7 @@ class FullmetrixConnector extends Module
         $this->tab = 'analytics_stats';
         $this->version = '1.5.0';
         $this->author = 'Fullmetrix';
+        $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.4.0', 'max' => '9.99.99'];
         $this->bootstrap = true;
@@ -95,9 +97,9 @@ class FullmetrixConnector extends Module
         $this->confirmUninstall = $this->l('Are you sure you want to uninstall the Fullmetrix module?');
 
         try {
-            $context = Context::getContext();
-            $shopId = ($context && $context->shop) ? (int) $context->shop->id : 1;
-            $link = ($context) ? $context->link : null;
+            $context = $this->context;
+            $shopId = $context->shop ? (int) $context->shop->id : 1;
+            $link = $context->link;
 
             FullmetrixWebhookSender::init($shopId, $link);
             FullmetrixTrackingSender::init();
@@ -184,8 +186,8 @@ class FullmetrixConnector extends Module
                 return;
             }
 
-            $context = Context::getContext();
-            if (!$context || !$context->language || !$context->currency || !$context->link) {
+            $context = $this->context;
+            if (!$context->language || !$context->currency || !$context->link) {
                 return;
             }
 
@@ -768,10 +770,7 @@ class FullmetrixConnector extends Module
                 return;
             }
 
-            $context = Context::getContext();
-            if (!$context) {
-                return;
-            }
+            $context = $this->context;
 
             $link = $context->link;
             $items = [];
@@ -972,8 +971,8 @@ class FullmetrixConnector extends Module
             $encoded = strtr(base64_encode($payloadJson), '+/', '-_');
             $signature = hash_hmac('sha256', $encoded, $secret);
 
-            $context = Context::getContext();
-            if (!$context || !$context->link) {
+            $context = $this->context;
+            if (!$context->link) {
                 return null;
             }
             $baseUrl = $context->link->getPageLink('cart', true);
@@ -1364,6 +1363,7 @@ class FullmetrixConnector extends Module
             'siteUrl' => $this->getShopUrl(),
             'pluginVersion' => self::FULLMETRIX_VERSION,
             'platform' => 'prestashop',
+            'channel' => self::FULLMETRIX_CHANNEL,
             'storeSettings' => $this->getStoreSettings(),
         ];
 

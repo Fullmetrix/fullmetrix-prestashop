@@ -49,8 +49,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     public function display()
     {
         $this->displayAjax();
-
-        return true;
     }
 
     public function displayAjax()
@@ -433,8 +431,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixFastExporter.php';
         $exporter = new FullmetrixFastExporter(
-            (int) Context::getContext()->shop->id ?: 1,
-            Context::getContext()->link
+            (int) $this->context->shop->id ?: 1,
+            $this->context->link
         );
 
         switch ($type) {
@@ -467,8 +465,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixStreamExporter.php';
 
         $exporter = new FullmetrixStreamExporter(
-            (int) Context::getContext()->shop->id ?: 1,
-            Context::getContext()->link
+            (int) $this->context->shop->id ?: 1,
+            $this->context->link
         );
 
         if ($type === 'stream_orders') {
@@ -485,8 +483,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixStreamExporter.php';
 
         $exporter = new FullmetrixStreamExporter(
-            (int) Context::getContext()->shop->id ?: 1,
-            Context::getContext()->link
+            (int) $this->context->shop->id ?: 1,
+            $this->context->link
         );
         $exporter->streamEntity($entity, $syncType, $since);
     }
@@ -502,8 +500,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $offset = max(0, (int) Tools::getValue('offset', 0));
 
         $exporter = new FullmetrixFastExporter(
-            (int) Context::getContext()->shop->id ?: 1,
-            Context::getContext()->link
+            (int) $this->context->shop->id ?: 1,
+            $this->context->link
         );
         $items = $exporter->getUpdatedIds($type, $days, $hours, $limit, $offset);
 

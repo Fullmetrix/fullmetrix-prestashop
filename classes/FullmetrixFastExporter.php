@@ -30,7 +30,7 @@ class FullmetrixFastExporter
         $this->prefix = _DB_PREFIX_;
         $this->idLang = (int) Configuration::get('PS_LANG_DEFAULT') ?: 1;
         $this->idShop = (int) $idShop;
-        $this->link = $link;
+        $this->link = $link ?: new Link();
     }
 
     public function exportOrdersFast($page = 1, $perPage = 100, $since = null)
@@ -258,7 +258,7 @@ class FullmetrixFastExporter
                     'id' => $productId,
                     'name' => (string) $row['name'],
                     'slug' => (string) ($row['link_rewrite'] ?? ''),
-                    'permalink' => \Context::getContext()->link->getProductLink($productId),
+                    'permalink' => $this->link->getProductLink($productId),
                     'sku' => (string) $row['reference'],
                     'type' => $hasCombinations ? 'variable' : 'simple',
                     'status' => $row['active'] ? 'publish' : 'draft',

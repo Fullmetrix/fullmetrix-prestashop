@@ -65,9 +65,9 @@ class FullmetrixWebhookSender
 
         $shopId = self::$idShop;
         try {
-            $ctx = Context::getContext();
-            if ($ctx && $ctx->shop && !empty($ctx->shop->id)) {
-                $shopId = (int) $ctx->shop->id;
+            $contextShopId = (int) Shop::getContextShopID();
+            if ($contextShopId) {
+                $shopId = $contextShopId;
             }
         } catch (\Throwable $e) {
             // Fall back to the static idShop captured at init

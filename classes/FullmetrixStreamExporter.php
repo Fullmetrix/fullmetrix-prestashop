@@ -32,7 +32,7 @@ class FullmetrixStreamExporter
         $this->prefix = _DB_PREFIX_;
         $this->idLang = (int) Configuration::get('PS_LANG_DEFAULT') ?: 1;
         $this->idShop = (int) $idShop;
-        $this->link = $link;
+        $this->link = $link ?: new Link();
     }
 
     /**
@@ -927,7 +927,7 @@ class FullmetrixStreamExporter
                         'id' => $pid,
                         'name' => (string) ($row['name'] ?? ''),
                         'slug' => (string) ($row['link_rewrite'] ?? ''),
-                        'permalink' => \Context::getContext()->link->getProductLink($pid),
+                        'permalink' => $this->link->getProductLink($pid),
                         'type' => $hasCombinations ? 'variable' : 'simple',
                         'status' => $row['active'] ? 'publish' : 'draft',
                         'description' => (string) ($row['description'] ?? ''),
@@ -983,7 +983,7 @@ class FullmetrixStreamExporter
                                 'id' => $pid . '_' . $aid,
                                 'name' => $comboName,
                                 'slug' => (string) ($row['link_rewrite'] ?? ''),
-                                'permalink' => \Context::getContext()->link->getProductLink($pid, null, null, null, null, null, $aid),
+                                'permalink' => $this->link->getProductLink($pid, null, null, null, null, null, $aid),
                                 'type' => 'variation',
                                 'status' => $row['active'] ? 'publish' : 'draft',
                                 'sku' => $comboRef,
@@ -1756,7 +1756,7 @@ class FullmetrixStreamExporter
             'id' => $pid,
             'name' => (string) ($row['name'] ?? ''),
             'slug' => (string) ($row['link_rewrite'] ?? ''),
-            'permalink' => \Context::getContext()->link->getProductLink($pid),
+            'permalink' => $this->link->getProductLink($pid),
             'type' => 'simple',
             'status' => $row['active'] ? 'publish' : 'draft',
             'description' => (string) ($row['description'] ?? ''),
