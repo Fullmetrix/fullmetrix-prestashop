@@ -99,11 +99,13 @@ class FullmetrixStreamExporter
                     break;
             }
         } catch (\Throwable $e) {
+            if (!class_exists('FullmetrixLogger')) {
+                require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
+            }
+            FullmetrixLogger::logException('stream_entity_' . $entity, $e);
             $this->sendLine([
                 'type' => 'error',
-                'message' => 'Fatal error streaming ' . $entity . ': ' . $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
+                'message' => 'An error occurred while streaming ' . $entity . '.',
             ]);
         }
 
@@ -112,6 +114,8 @@ class FullmetrixStreamExporter
             'completed_at' => gmdate('c'),
             'count' => $count,
         ]);
+
+        $this->recordSyncCompletion([$entity => $count]);
 
         $this->finishStream();
         exit;
@@ -148,6 +152,8 @@ class FullmetrixStreamExporter
             'counts' => $counts,
         ]);
 
+        $this->recordSyncCompletion($counts);
+
         $this->finishStream();
         exit;
     }
@@ -177,8 +183,23 @@ class FullmetrixStreamExporter
             'count' => $count,
         ]);
 
+        $this->recordSyncCompletion(['orders' => $count]);
+
         $this->finishStream();
         exit;
+    }
+
+    private function recordSyncCompletion(array $counts)
+    {
+        foreach ($counts as $entity => $count) {
+            $key = 'FULLMETRIX_SYNC_' . Tools::strtoupper($entity);
+            Configuration::updateValue($key, json_encode([
+                'c' => (int) $count,
+                't' => time(),
+            ]));
+        }
+
+        Configuration::updateValue('FULLMETRIX_SYNC_IN_PROGRESS', '');
     }
 
     private function setupStream()
@@ -197,6 +218,9 @@ class FullmetrixStreamExporter
         header('Content-Type: application/x-ndjson');
         header('X-Accel-Buffering: no');
         header('Cache-Control: no-cache');
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+        header('X-Frame-Options: SAMEORIGIN');
+        header('X-Content-Type-Options: nosniff');
         // Let the web server (Apache/nginx) handle gzip via mod_deflate —
         // doing it in PHP with ob_gzhandler breaks progressive streaming
     }
@@ -1431,9 +1455,13 @@ class FullmetrixStreamExporter
                     usleep(200000 * ($attempt + 1)); // 200ms, 400ms
                     continue;
                 }
+                if (!class_exists('FullmetrixLogger')) {
+                    require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
+                }
+                FullmetrixLogger::logException('safe_query' . ($context ? '_' . $context : ''), $e);
                 $this->sendLine([
                     'type' => 'error',
-                    'message' => 'SQL exception' . ($context ? ' [' . $context . ']' : '') . ': ' . $e->getMessage(),
+                    'message' => 'A database error occurred while exporting data.',
                     'attempt' => $attempt + 1,
                 ]);
                 return false;
@@ -1486,32 +1514,40 @@ class FullmetrixStreamExporter
 
     private function maybeGc()
     {
-        ++$this->gcCounter;
-        if ($this->gcCounter % 3 === 0 && function_exists('gc_collect_cycles')) {
-            gc_collect_cycles();
-        }
-        if ($this->memoryLimitBytes) {
-            $memPct = memory_get_usage(true) / $this->memoryLimitBytes;
-            if ($memPct > 0.8) {
-                $this->batchSize = max(100, (int) ($this->batchSize * 0.5));
-                $this->sendLine(['type' => 'info', 'message' => 'Batch reduit (pression memoire)']);
-                if (function_exists('gc_collect_cycles')) {
-                    gc_collect_cycles();
+        try {
+            ++$this->gcCounter;
+            if ($this->gcCounter % 3 === 0 && function_exists('gc_collect_cycles')) {
+                gc_collect_cycles();
+            }
+            if ($this->memoryLimitBytes) {
+                $memPct = memory_get_usage(true) / $this->memoryLimitBytes;
+                if ($memPct > 0.8) {
+                    $this->batchSize = max(100, (int) ($this->batchSize * 0.5));
+                    $this->sendLine(['type' => 'info', 'message' => 'Batch reduit (pression memoire)']);
+                    if (function_exists('gc_collect_cycles')) {
+                        gc_collect_cycles();
+                    }
                 }
             }
+        } catch (\Throwable $e) {
+            // memory housekeeping is best-effort
         }
     }
 
     private function adaptBatchSize()
     {
-        if (!$this->memoryLimitBytes) {
-            return;
-        }
-        $memPct = memory_get_usage(true) / $this->memoryLimitBytes;
-        if ($memPct > 0.7 && $this->batchSize > 100) {
-            $this->batchSize = max(100, (int) ($this->batchSize * 0.5));
-        } elseif ($memPct < 0.4 && $this->batchSize < 2000) {
-            $this->batchSize = min(2000, (int) ($this->batchSize * 1.5));
+        try {
+            if (!$this->memoryLimitBytes) {
+                return;
+            }
+            $memPct = memory_get_usage(true) / $this->memoryLimitBytes;
+            if ($memPct > 0.7 && $this->batchSize > 100) {
+                $this->batchSize = max(100, (int) ($this->batchSize * 0.5));
+            } elseif ($memPct < 0.4 && $this->batchSize < 2000) {
+                $this->batchSize = min(2000, (int) ($this->batchSize * 1.5));
+            }
+        } catch (\Throwable $e) {
+            // batch tuning is best-effort
         }
     }
 

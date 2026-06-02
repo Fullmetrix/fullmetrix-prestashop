@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.5.0';
+    const FULLMETRIX_VERSION = '1.5.1';
     const FULLMETRIX_CHANNEL = 'community';
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
@@ -83,7 +83,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.0';
+        $this->version = '1.5.1';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -138,6 +138,10 @@ class FullmetrixConnector extends Module
 
     public function uninstall()
     {
+        foreach (['ORDERS', 'CUSTOMERS', 'PRODUCTS', 'CATEGORIES', 'COUPONS', 'REFUNDS'] as $entity) {
+            Configuration::deleteByName('FULLMETRIX_SYNC_' . $entity);
+        }
+
         return parent::uninstall()
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_CODE')
             && Configuration::deleteByName('FULLMETRIX_CONNECTION_SECRET')
@@ -1016,21 +1020,18 @@ class FullmetrixConnector extends Module
         }
 
         if (Tools::isSubmit('submitFullmetrixDisconnect')) {
-            Configuration::updateValue('FULLMETRIX_CONNECTION_CODE', '');
             Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', '');
             Configuration::updateValue('FULLMETRIX_REGISTERED', false);
             Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', false);
             Configuration::updateValue('FULLMETRIX_LAST_SYNC', '');
             Configuration::updateValue('FULLMETRIX_EXPORT_COUNT', 0);
             Configuration::updateValue('FULLMETRIX_SYNC_IN_PROGRESS', '');
+            foreach (['ORDERS', 'CUSTOMERS', 'PRODUCTS', 'CATEGORIES', 'COUPONS', 'REFUNDS'] as $entity) {
+                Configuration::deleteByName('FULLMETRIX_SYNC_' . $entity);
+            }
             Configuration::deleteByName('FULLMETRIX_PLUGIN_CONFIG');
             self::clearConfigCache();
             $output .= $this->displayConfirmation($this->l('Successfully disconnected.'));
-        }
-
-        if (Tools::isSubmit('submitFullmetrixClearLogs')) {
-            FullmetrixLogger::clear();
-            $output .= $this->displayConfirmation($this->l('Logs cleared.'));
         }
 
         $isRegistered = (bool) Configuration::get('FULLMETRIX_REGISTERED');
@@ -1040,22 +1041,8 @@ class FullmetrixConnector extends Module
             return $output;
         }
 
-        // Tabs for connected state — wrapper uses HelperForm output (already safe HTML)
-        $formHtml = $this->renderForm();
-        $syncHtml = $this->renderSyncActivity();
-        $logsHtml = $this->renderLogsTab();
-
-        $this->context->smarty->assign([
-            'connection_label' => $this->l('Connection'),
-            'logs_label' => $this->l('Logs'),
-        ]);
-        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_header.tpl');
-        $output .= $formHtml;
-        $output .= $syncHtml;
-        $this->context->smarty->assign(['is_logs_tab' => true]);
-        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_separator.tpl');
-        $output .= $logsHtml;
-        $output .= $this->display(__FILE__, 'views/templates/admin/tabs_footer.tpl');
+        $output .= $this->renderForm();
+        $output .= $this->renderSyncActivity();
 
         return $output;
     }
@@ -1072,110 +1059,39 @@ class FullmetrixConnector extends Module
         return $this->renderConnectForm($connectionCode);
     }
 
+    protected function getConfigFormAction()
+    {
+        return $this->context->link->getAdminLink('AdminModules', false)
+            . '&configure=' . $this->name . '&tab_module=' . $this->tab . '&module_name=' . $this->name
+            . '&token=' . Tools::getAdminTokenLite('AdminModules');
+    }
+
     protected function renderConnectedForm($connectionCode)
     {
-        $helper = new HelperForm();
+        $this->context->smarty->assign([
+            'fullmetrix_logo' => $this->_path . 'logo.png',
+            'connection_code' => $connectionCode,
+            'form_action' => $this->getConfigFormAction(),
+        ]);
 
-        $helper->show_toolbar = false;
-        $helper->table = $this->table;
-        $helper->module = $this;
-        $helper->default_form_language = $this->context->language->id;
-        $helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG', 0);
-        $helper->identifier = $this->identifier;
-        $helper->submit_action = 'submitFullmetrixDisconnect';
-        $helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false)
-            . '&configure=' . $this->name . '&tab_module=' . $this->tab . '&module_name=' . $this->name;
-        $helper->token = Tools::getAdminTokenLite('AdminModules');
-
-        $helper->tpl_vars = [
-            'fields_value' => [
-                'FULLMETRIX_CONNECTION_CODE_DISPLAY' => $connectionCode,
-            ],
-            'languages' => $this->context->controller->getLanguages(),
-            'id_language' => $this->context->language->id,
-        ];
-
-        $form = [
-            'form' => [
-                'legend' => [
-                    'title' => $this->l('Fullmetrix - Connected'),
-                    'icon' => 'icon-check',
-                ],
-                'description' => $this->l('Your store is connected and ready to sync orders with Fullmetrix.'),
-                'input' => [
-                    [
-                        'type' => 'text',
-                        'label' => $this->l('Connection code'),
-                        'name' => 'FULLMETRIX_CONNECTION_CODE_DISPLAY',
-                        'readonly' => true,
-                        'disabled' => true,
-                    ],
-                ],
-                'submit' => [
-                    'title' => $this->l('Disconnect'),
-                    'class' => 'btn btn-default pull-right',
-                ],
-            ],
-        ];
-
-        return $helper->generateForm([$form]);
+        return $this->display(__FILE__, 'views/templates/admin/connected.tpl');
     }
 
     protected function renderConnectForm($connectionCode)
     {
-        $helper = new HelperForm();
+        $this->context->smarty->assign([
+            'fullmetrix_logo' => $this->_path . 'logo.png',
+            'connection_code' => $connectionCode,
+            'form_action' => $this->getConfigFormAction(),
+        ]);
 
-        $helper->show_toolbar = false;
-        $helper->table = $this->table;
-        $helper->module = $this;
-        $helper->default_form_language = $this->context->language->id;
-        $helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG', 0);
-        $helper->identifier = $this->identifier;
-        $helper->submit_action = 'submitFullmetrixConnect';
-        $helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false)
-            . '&configure=' . $this->name . '&tab_module=' . $this->tab . '&module_name=' . $this->name;
-        $helper->token = Tools::getAdminTokenLite('AdminModules');
-
-        $helper->tpl_vars = [
-            'fields_value' => [
-                'FULLMETRIX_CONNECTION_CODE' => $connectionCode,
-            ],
-            'languages' => $this->context->controller->getLanguages(),
-            'id_language' => $this->context->language->id,
-        ];
-
-        $form = [
-            'form' => [
-                'legend' => [
-                    'title' => $this->l('Fullmetrix - Configuration'),
-                    'icon' => 'icon-cogs',
-                ],
-                'description' => $this->l('Enter the connection code provided by Fullmetrix to connect your store.'),
-                'input' => [
-                    [
-                        'type' => 'text',
-                        'label' => $this->l('Connection code'),
-                        'name' => 'FULLMETRIX_CONNECTION_CODE',
-                        'placeholder' => 'FMTX-XXXX-XXXX-XXXX',
-                        'required' => true,
-                    ],
-                ],
-                'submit' => [
-                    'title' => $this->l('Connect'),
-                    'class' => 'btn btn-primary pull-right',
-                ],
-            ],
-        ];
-
-        return $helper->generateForm([$form]);
+        return $this->display(__FILE__, 'views/templates/admin/connect.tpl');
     }
 
     protected function renderSyncActivity()
     {
         $inProgressRaw = Configuration::get('FULLMETRIX_SYNC_IN_PROGRESS');
         $inProgress = !empty($inProgressRaw) ? json_decode($inProgressRaw, true) : null;
-        $lastSyncRaw = Configuration::get('FULLMETRIX_LAST_SYNC');
-        $lastSync = !empty($lastSyncRaw) ? json_decode($lastSyncRaw, true) : null;
         $exportCount = (int) Configuration::get('FULLMETRIX_EXPORT_COUNT');
 
         // Check if in-progress is stale (> 10 min)
@@ -1198,40 +1114,64 @@ class FullmetrixConnector extends Module
             }
         }
 
-        $lastSyncData = null;
-        $lastSyncTimeAgo = '';
-        $lastSyncMode = '';
+        $entityLabels = [
+            'orders' => $this->l('Orders'),
+            'customers' => $this->l('Customers'),
+            'products' => $this->l('Products'),
+            'categories' => $this->l('Categories'),
+            'coupons' => $this->l('Coupons'),
+            'refunds' => $this->l('Refunds'),
+        ];
+
         $lastSyncEntities = [];
+        $latestCompletedAt = 0;
 
-        if (!$syncInProgress && $lastSync && isset($lastSync['completed_at'])) {
-            $lastSyncData = $lastSync;
-            $lastSyncTimeAgo = $this->formatTimeAgo((int) $lastSync['completed_at']);
-
-            if (!empty($lastSync['type'])) {
-                $lastSyncMode = $lastSync['type'] === 'bulk'
-                    ? $this->l('Full export')
-                    : $this->l('Paginated export');
+        foreach ($entityLabels as $entity => $label) {
+            $raw = Configuration::get('FULLMETRIX_SYNC_' . Tools::strtoupper($entity));
+            if (empty($raw)) {
+                continue;
             }
+            $data = json_decode($raw, true);
+            if (!is_array($data) || !isset($data['t'])) {
+                continue;
+            }
+            $latestCompletedAt = max($latestCompletedAt, (int) $data['t']);
+            $count = (int) ($data['c'] ?? 0);
+            if ($count > 0) {
+                $lastSyncEntities[] = [
+                    'label' => $label,
+                    'count_formatted' => number_format($count, 0, ',', ' '),
+                ];
+            }
+        }
 
-            if (!empty($lastSync['entities']) && is_array($lastSync['entities'])) {
-                foreach ($lastSync['entities'] as $label => $count) {
-                    if ($count > 0) {
-                        $lastSyncEntities[] = [
-                            'label' => $label,
-                            'count_formatted' => number_format($count, 0, ',', ' '),
-                        ];
+        // Fallback to legacy single-key record (paginated export path)
+        if ($latestCompletedAt === 0) {
+            $lastSyncRaw = Configuration::get('FULLMETRIX_LAST_SYNC');
+            $lastSync = !empty($lastSyncRaw) ? json_decode($lastSyncRaw, true) : null;
+            if (is_array($lastSync) && isset($lastSync['completed_at'])) {
+                $latestCompletedAt = (int) $lastSync['completed_at'];
+                if (!empty($lastSync['entities']) && is_array($lastSync['entities'])) {
+                    foreach ($lastSync['entities'] as $label => $count) {
+                        if ($count > 0) {
+                            $lastSyncEntities[] = [
+                                'label' => $label,
+                                'count_formatted' => number_format($count, 0, ',', ' '),
+                            ];
+                        }
                     }
                 }
             }
         }
 
+        $hasLastSync = $latestCompletedAt > 0;
+
         $this->context->smarty->assign([
             'sync_in_progress' => $syncInProgress,
             'sync_elapsed' => $syncElapsed,
             'sync_type_label' => $syncTypeLabel,
-            'last_sync' => $lastSyncData,
-            'last_sync_time_ago' => $lastSyncTimeAgo,
-            'last_sync_mode' => $lastSyncMode,
+            'last_sync' => $hasLastSync,
+            'last_sync_time_ago' => $hasLastSync ? $this->formatTimeAgo($latestCompletedAt) : '',
             'last_sync_entities' => $lastSyncEntities,
             'export_count' => $exportCount,
             'export_count_formatted' => number_format($exportCount, 0, ',', ' '),
@@ -1240,109 +1180,49 @@ class FullmetrixConnector extends Module
         return $this->display(__FILE__, 'views/templates/admin/sync_activity.tpl');
     }
 
-    protected function renderLogsTab()
-    {
-        $inProgressRaw = Configuration::get('FULLMETRIX_SYNC_IN_PROGRESS');
-        $inProgress = !empty($inProgressRaw) ? json_decode($inProgressRaw, true) : null;
-
-        $adminUrl = $this->context->link->getAdminLink('AdminModules', true)
-            . '&configure=' . $this->name . '&tab_module=' . $this->tab . '&module_name=' . $this->name;
-
-        $badgeColors = [
-            'registered' => '#27ae60',
-            'disconnected' => '#95a5a6',
-            'sync_start' => '#2980b9',
-            'sync_complete' => '#27ae60',
-            'sync_error' => '#e74c3c',
-            'webhook' => '#2980b9',
-        ];
-
-        $typeLabels = [
-            'registered' => 'Connected',
-            'disconnected' => 'Disconnected',
-            'sync_start' => 'Sync',
-            'sync_complete' => 'Sync OK',
-            'sync_error' => 'Error',
-            'webhook' => 'Webhook',
-        ];
-
-        $rawLogs = FullmetrixLogger::getLogs();
-
-        $logs = [];
-        foreach ($rawLogs as $log) {
-            $color = isset($badgeColors[$log['type']]) ? $badgeColors[$log['type']] : '#95a5a6';
-            $label = isset($typeLabels[$log['type']]) ? $typeLabels[$log['type']] : $log['type'];
-
-            $details = "\xE2\x80\x94"; // em dash
-            if (!empty($log['details']) && is_array($log['details'])) {
-                $parts = [];
-                foreach ($log['details'] as $k => $v) {
-                    if (is_array($v)) {
-                        $sub = [];
-                        foreach ($v as $sk => $sv) {
-                            $sub[] = is_int($sk) ? $sv : $sk . '=' . $sv;
-                        }
-                        $v = implode(', ', $sub);
-                    }
-                    $parts[] = $k . ': ' . $v;
-                }
-                $details = implode(' | ', $parts);
-            }
-
-            $logs[] = [
-                'color' => $color,
-                'label' => $label,
-                'message' => $log['message'],
-                'details' => $details,
-                'date_added' => date('d/m/Y H:i:s', (int) $log['time']),
-            ];
-        }
-
-        $this->context->smarty->assign([
-            'logs' => $logs,
-            'admin_url' => $adminUrl,
-            'has_logs' => !empty($logs),
-            'sync_in_progress' => !empty($inProgress),
-        ]);
-
-        return $this->display(__FILE__, 'views/templates/admin/logs.tpl');
-    }
-
     protected function formatTimeAgo($timestamp)
     {
-        $diff = time() - $timestamp;
+        try {
+            $diff = time() - (int) $timestamp;
 
-        if ($diff < 60) {
-            return $this->l('just now');
-        }
-        if ($diff < 3600) {
-            $mins = (int) floor($diff / 60);
-            return sprintf($this->l('%d min ago'), $mins);
-        }
-        if ($diff < 86400) {
-            $hours = (int) floor($diff / 3600);
-            return sprintf($this->l('%d h ago'), $hours);
-        }
+            if ($diff < 60) {
+                return $this->l('just now');
+            }
+            if ($diff < 3600) {
+                $mins = (int) floor($diff / 60);
+                return sprintf($this->l('%d min ago'), $mins);
+            }
+            if ($diff < 86400) {
+                $hours = (int) floor($diff / 3600);
+                return sprintf($this->l('%d h ago'), $hours);
+            }
 
-        return date('d/m/Y H:i', $timestamp);
+            return date('d/m/Y H:i', (int) $timestamp);
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     protected function formatDuration($seconds)
     {
-        $seconds = (int) $seconds;
+        try {
+            $seconds = (int) $seconds;
 
-        if ($seconds < 60) {
-            return sprintf($this->l('%d sec'), $seconds);
-        }
-        if ($seconds < 3600) {
-            $mins = (int) floor($seconds / 60);
-            $secs = $seconds % 60;
-            return sprintf($this->l('%d min %d sec'), $mins, $secs);
-        }
+            if ($seconds < 60) {
+                return sprintf($this->l('%d sec'), $seconds);
+            }
+            if ($seconds < 3600) {
+                $mins = (int) floor($seconds / 60);
+                $secs = $seconds % 60;
+                return sprintf($this->l('%d min %d sec'), $mins, $secs);
+            }
 
-        $hours = (int) floor($seconds / 3600);
-        $mins = (int) floor(($seconds % 3600) / 60);
-        return sprintf($this->l('%d h %d min'), $hours, $mins);
+            $hours = (int) floor($seconds / 3600);
+            $mins = (int) floor(($seconds % 3600) / 60);
+            return sprintf($this->l('%d h %d min'), $hours, $mins);
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     protected function validateCodeFormat($code)
@@ -1352,56 +1232,61 @@ class FullmetrixConnector extends Module
 
     protected function registerWithFullmetrix()
     {
-        $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
+        try {
+            $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
 
-        if (empty($code)) {
-            return $this->l('Connection code missing');
-        }
+            if (empty($code)) {
+                return $this->l('Connection code missing');
+            }
 
-        $data = [
-            'connectionCode' => $code,
-            'siteUrl' => $this->getShopUrl(),
-            'pluginVersion' => self::FULLMETRIX_VERSION,
-            'platform' => 'prestashop',
-            'channel' => self::FULLMETRIX_CHANNEL,
-            'storeSettings' => $this->getStoreSettings(),
-        ];
+            $data = [
+                'connectionCode' => $code,
+                'siteUrl' => $this->getShopUrl(),
+                'pluginVersion' => self::FULLMETRIX_VERSION,
+                'platform' => 'prestashop',
+                'channel' => self::FULLMETRIX_CHANNEL,
+                'storeSettings' => $this->getStoreSettings(),
+            ];
 
-        $response = $this->makeHttpRequest(
-            self::getApiBase() . '/register',
-            'POST',
-            json_encode($data),
-            ['Content-Type: application/json']
-        );
+            $response = $this->makeHttpRequest(
+                self::getApiBase() . '/register',
+                'POST',
+                json_encode($data),
+                ['Content-Type: application/json']
+            );
 
-        if ($response === false) {
+            if ($response === false) {
+                return $this->l('Connection error to Fullmetrix server');
+            }
+
+            $result = json_decode($response['body'], true);
+            $statusCode = $response['http_code'];
+
+            if ($statusCode === 404) {
+                return $this->l('Connection code not found. Check your code in Fullmetrix.');
+            }
+
+            if ($statusCode === 409) {
+                return $this->l('This code is already associated with another site.');
+            }
+
+            if ($statusCode !== 200 || empty($result['success'])) {
+                $errorMessage = isset($result['error']) ? $result['error'] : $this->l('Unknown error');
+                return sprintf($this->l('Registration failed: %s'), $errorMessage);
+            }
+
+            if (!empty($result['connectionSecret'])) {
+                Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', $result['connectionSecret']);
+            }
+
+            Configuration::updateValue('FULLMETRIX_REGISTERED', true);
+            Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', true);
+
+            return true;
+        } catch (\Throwable $e) {
+            FullmetrixLogger::logException('registerWithFullmetrix', $e);
             return $this->l('Connection error to Fullmetrix server');
         }
-
-        $result = json_decode($response['body'], true);
-        $statusCode = $response['http_code'];
-
-        if ($statusCode === 404) {
-            return $this->l('Connection code not found. Check your code in Fullmetrix.');
-        }
-
-        if ($statusCode === 409) {
-            return $this->l('This code is already associated with another site.');
-        }
-
-        if ($statusCode !== 200 || empty($result['success'])) {
-            $errorMessage = isset($result['error']) ? $result['error'] : $this->l('Unknown error');
-            return sprintf($this->l('Registration failed: %s'), $errorMessage);
-        }
-
-        if (!empty($result['connectionSecret'])) {
-            Configuration::updateValue('FULLMETRIX_CONNECTION_SECRET', $result['connectionSecret']);
-        }
-
-        Configuration::updateValue('FULLMETRIX_REGISTERED', true);
-        Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', true);
-
-        return true;
     }
 
     protected function getStoreSettings()

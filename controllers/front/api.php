@@ -27,6 +27,9 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
     public function init()
     {
+        @ini_set('display_errors', '0');
+        @ini_set('display_startup_errors', '0');
+
         try {
             parent::init();
         } catch (\Throwable $e) {
@@ -35,6 +38,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
+            $this->sendSecurityHeaders();
         }
     }
 
@@ -710,10 +714,22 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         return null;
     }
 
+    private function sendSecurityHeaders()
+    {
+        if (headers_sent()) {
+            return;
+        }
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+        header('X-Frame-Options: SAMEORIGIN');
+        header('X-Content-Type-Options: nosniff');
+        header('Referrer-Policy: strict-origin-when-cross-origin');
+    }
+
     private function sendJson($data)
     {
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
+            $this->sendSecurityHeaders();
         }
         echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
         exit;
@@ -724,6 +740,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         if (!headers_sent()) {
             header('Content-Type: application/json; charset=utf-8');
             http_response_code($statusCode);
+            $this->sendSecurityHeaders();
         }
         echo json_encode([
             'success' => false,

@@ -150,6 +150,6 @@ class FullmetrixLogger
             return '';
         }
 
-        return substr(md5($json), 0, 12);
+        return substr(hash('sha256', $json), 0, 12);
     }
 }
