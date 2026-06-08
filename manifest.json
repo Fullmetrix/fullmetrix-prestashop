@@ -1,6 +1,6 @@
 {
-  "version": "1.5.1",
+  "version": "1.5.2",
   "minimumRequired": "1.7.4.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Redesigned configuration page with clearer connection and sync sections. Sync activity now records the last successful sync per entity, so the panel reflects the real state instead of staying on 'waiting for first sync'. Added native French translations. Security hardening: replaced the md5 fingerprint with sha256, added Strict-Transport-Security, X-Frame-Options and X-Content-Type-Options headers on the API controller and stream responses, error display disabled on the front controller, exception details are no longer exposed in responses (logged internally instead), and broader try-catch coverage across exporters and helpers. Removed the admin Logs tab."
+  "changelog": "PrestaShop 9 compatibility. Added suppliers, product features and conversion-rate data to the sync. Stability and maintenance improvements."
 }
