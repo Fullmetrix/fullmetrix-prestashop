@@ -387,6 +387,11 @@ class FullmetrixConnector extends Module
                 return '';
             }
 
+            $config = $this->getCachedConfig();
+            if (is_array($config) && isset($config['trackerEnabled']) && $config['trackerEnabled'] === false) {
+                return '';
+            }
+
             $this->maybeRebuildCart();
 
             $apiBase = self::getConfig('FULLMETRIX_API_BASE');
