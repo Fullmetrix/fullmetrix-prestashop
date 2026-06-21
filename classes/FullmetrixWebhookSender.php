@@ -30,7 +30,7 @@ class FullmetrixWebhookSender
     /** @var int */
     private static $idShop = 1;
 
-    /** @var \Link|null */
+    /** @var Link|null */
     private static $link;
 
     /** @var bool Shared flag so fastcgi_finish_request is only called once per request */
@@ -69,7 +69,7 @@ class FullmetrixWebhookSender
             if ($contextShopId) {
                 $shopId = $contextShopId;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // Fall back to the static idShop captured at init
         }
 
@@ -157,11 +157,11 @@ class FullmetrixWebhookSender
 
                     $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
                     self::curlPost($apiUrl, $payload, $headers, $connectTimeoutMs, $totalTimeoutMs);
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     FullmetrixLogger::logException('webhookSender_entity', $e);
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('webhookSender_flushQueue', $e);
         }
 

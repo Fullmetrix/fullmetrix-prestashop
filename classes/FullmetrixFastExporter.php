@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixFastExporter
 {
-    const VERSION = '1.0.0';
+    public const VERSION = '1.0.0';
 
     private $db;
     private $prefix;
@@ -22,7 +22,7 @@ class FullmetrixFastExporter
 
     /**
      * @param int $idShop Shop ID
-     * @param \Link|null $link PrestaShop Link instance for URL generation
+     * @param Link|null $link PrestaShop Link instance for URL generation
      */
     public function __construct($idShop = 1, $link = null)
     {
@@ -140,7 +140,7 @@ class FullmetrixFastExporter
                 ],
                 'orders' => $orders,
             ];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -321,7 +321,7 @@ class FullmetrixFastExporter
                 'meta' => $this->buildMeta($total, $page, $totalPages, $perPage),
                 'products' => $products,
             ];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -505,7 +505,7 @@ class FullmetrixFastExporter
                 'meta' => $this->buildMeta($total, $page, $totalPages, $perPage),
                 'customers' => $customers,
             ];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -563,7 +563,7 @@ class FullmetrixFastExporter
                 'meta' => $this->buildMeta($total, $page, $totalPages, $perPage),
                 'categories' => $categories,
             ];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -633,7 +633,7 @@ class FullmetrixFastExporter
                 'meta' => $this->buildMeta($total, $page, $totalPages, $perPage),
                 'coupons' => $coupons,
             ];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -696,7 +696,7 @@ class FullmetrixFastExporter
 
                 return $url;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             /* intentionally empty */
         }
 
@@ -730,7 +730,7 @@ class FullmetrixFastExporter
             $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
 
             return rtrim(($ssl ? 'https://' : 'http://') . $domain . $physicalUri, '/');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return 'https://unknown';
         }
     }

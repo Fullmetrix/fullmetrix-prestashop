@@ -1,6 +1,6 @@
 {
-  "version": "1.5.2",
+  "version": "1.5.3",
   "minimumRequired": "1.7.4.0",
   "maximumRequired": "9.99.99",
-  "changelog": "PrestaShop 9 compatibility. Added suppliers, product features and conversion-rate data to the sync. Stability and maintenance improvements."
+  "changelog": "Adds raw PrestaShop shop context and customer group data to sync and webhook payloads for staged multi-shop and B2B support."
 }

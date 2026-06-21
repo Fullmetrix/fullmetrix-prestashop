@@ -12,13 +12,13 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixLogger
 {
-    const MAX_ENTRIES = 30;
-    const MAX_MESSAGE_LEN = 256;
-    const MAX_CONTEXT_LEN = 64;
-    const MAX_DETAIL_STRING_LEN = 256;
-    const MAX_TOTAL_BYTES = 524288;
-    const DEDUP_WINDOW_SECONDS = 60;
-    const CONFIG_KEY = 'FULLMETRIX_LOGS';
+    public const MAX_ENTRIES = 30;
+    public const MAX_MESSAGE_LEN = 256;
+    public const MAX_CONTEXT_LEN = 64;
+    public const MAX_DETAIL_STRING_LEN = 256;
+    public const MAX_TOTAL_BYTES = 524288;
+    public const DEDUP_WINDOW_SECONDS = 60;
+    public const CONFIG_KEY = 'FULLMETRIX_LOGS';
 
     public static function log($type, $message, $details = [])
     {
@@ -76,7 +76,7 @@ class FullmetrixLogger
             }
 
             Configuration::updateValue(self::CONFIG_KEY, $encoded);
-        } catch (\Throwable $inner) {
+        } catch (Throwable $inner) {
             // Logger itself must never bubble
         }
     }
@@ -106,7 +106,7 @@ class FullmetrixLogger
                 'file' => self::clip(basename($e->getFile()) . ':' . $e->getLine(), self::MAX_DETAIL_STRING_LEN),
             ];
             self::log('sync_error', 'hook_exception', $details);
-        } catch (\Throwable $inner) {
+        } catch (Throwable $inner) {
             // Logger itself must never bubble
         }
     }

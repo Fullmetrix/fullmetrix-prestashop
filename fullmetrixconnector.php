@@ -19,9 +19,9 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 
 class FullmetrixConnector extends Module
 {
-    const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    const FULLMETRIX_VERSION = '1.5.2';
-    const FULLMETRIX_CHANNEL = 'community';
+    public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
+    public const FULLMETRIX_VERSION = '1.5.3';
+    public const FULLMETRIX_CHANNEL = 'community';
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
     private static $configCache = [];
@@ -83,7 +83,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.2';
+        $this->version = '1.5.3';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -103,7 +103,7 @@ class FullmetrixConnector extends Module
 
             FullmetrixWebhookSender::init($shopId, $link);
             FullmetrixTrackingSender::init();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('module_construct', $e);
         }
     }
@@ -222,7 +222,7 @@ class FullmetrixConnector extends Module
                             (int) $product['id_product'],
                             (int) $product['id_product_attribute']
                         );
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         // Continue clearing other items
                     }
                 }
@@ -237,7 +237,7 @@ class FullmetrixConnector extends Module
                     if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
                         $cart->updateQty($quantity, $productId, $variationId);
                     }
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // Skip this item
                 }
             }
@@ -256,7 +256,7 @@ class FullmetrixConnector extends Module
                         if ($cartRuleId > 0) {
                             $cart->addCartRule($cartRuleId);
                         }
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         // Skip this coupon
                     }
                 }
@@ -271,7 +271,7 @@ class FullmetrixConnector extends Module
                 Tools::redirect($cartUrl);
                 exit;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('maybeRebuildCart', $e);
         }
     }
@@ -373,7 +373,7 @@ class FullmetrixConnector extends Module
             self::$cachedConfigThisRequest = $config;
 
             return $config;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('getCachedConfig', $e);
             self::$cachedConfigThisRequest = null;
             return null;
@@ -407,7 +407,7 @@ class FullmetrixConnector extends Module
             ]);
 
             return $this->display(__FILE__, 'views/templates/hook/header.tpl');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookDisplayHeader', $e);
             return '';
         }
@@ -421,7 +421,7 @@ class FullmetrixConnector extends Module
             }
             $this->getCachedConfig();
             return '';
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookDisplayFooter', $e);
             return '';
         }
@@ -464,14 +464,14 @@ class FullmetrixConnector extends Module
                             $contact['country_code'] = $countryIso;
                         }
                     }
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // Address lookup failed, continue with bare contact data
                 }
                 FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
 
                 $this->forwardCheckoutConsent($customerObj, $phone);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionValidateOrder', $e);
         }
     }
@@ -534,7 +534,7 @@ class FullmetrixConnector extends Module
                 register_shutdown_function([__CLASS__, 'flushPendingConsents']);
                 self::$consentShutdownRegistered = true;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('forwardCheckoutConsent', $e);
         }
     }
@@ -580,11 +580,11 @@ class FullmetrixConnector extends Module
                     ]);
                     @curl_exec($ch);
                     @curl_close($ch);
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // Skip this consent, keep flushing the rest
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('flushPendingConsents', $e);
         }
 
@@ -610,7 +610,7 @@ class FullmetrixConnector extends Module
             $uri = substr($uri, 0, 2048);
 
             return $scheme . $domain . $uri;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return '';
         }
     }
@@ -624,7 +624,7 @@ class FullmetrixConnector extends Module
             if (isset($params['id_order'])) {
                 FullmetrixWebhookSender::enqueue('order', (int) $params['id_order']);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionOrderStatusUpdate', $e);
         }
     }
@@ -638,7 +638,7 @@ class FullmetrixConnector extends Module
             if (isset($params['customer']) && is_object($params['customer'])) {
                 FullmetrixWebhookSender::enqueue('customer', (int) $params['customer']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionCustomerAccountUpdate', $e);
         }
     }
@@ -652,7 +652,7 @@ class FullmetrixConnector extends Module
             if (isset($params['object']) && is_object($params['object'])) {
                 FullmetrixWebhookSender::enqueue('customer', (int) $params['object']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionObjectCustomerUpdateAfter', $e);
         }
     }
@@ -668,7 +668,7 @@ class FullmetrixConnector extends Module
             } elseif (isset($params['product']) && is_object($params['product'])) {
                 FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionProductUpdate', $e);
         }
     }
@@ -684,7 +684,7 @@ class FullmetrixConnector extends Module
             } elseif (isset($params['product']) && is_object($params['product'])) {
                 FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionProductAdd', $e);
         }
     }
@@ -698,7 +698,7 @@ class FullmetrixConnector extends Module
             if (isset($params['id_product'])) {
                 FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionUpdateQuantity', $e);
         }
     }
@@ -712,7 +712,7 @@ class FullmetrixConnector extends Module
             if (isset($params['object']) && is_object($params['object'])) {
                 FullmetrixWebhookSender::enqueue('coupon', (int) $params['object']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionObjectCartRuleUpdateAfter', $e);
         }
     }
@@ -734,7 +734,7 @@ class FullmetrixConnector extends Module
                     FullmetrixWebhookSender::enqueue('refund', $slipId);
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionOrderSlipAdd', $e);
         }
     }
@@ -748,7 +748,7 @@ class FullmetrixConnector extends Module
             if (isset($params['category']) && is_object($params['category'])) {
                 FullmetrixWebhookSender::enqueue('category', (int) $params['category']->id);
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionCategoryUpdate', $e);
         }
     }
@@ -770,7 +770,7 @@ class FullmetrixConnector extends Module
                 if (method_exists($cart, 'orderExists') && $cart->orderExists()) {
                     return;
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // If orderExists check fails, continue with cart_updated emit
             }
 
@@ -795,7 +795,7 @@ class FullmetrixConnector extends Module
                         if ($imageUrl && strpos($imageUrl, 'http') !== 0) {
                             $imageUrl = 'https://' . $imageUrl;
                         }
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         $imageUrl = null;
                     }
                 }
@@ -804,7 +804,7 @@ class FullmetrixConnector extends Module
                 if ($link) {
                     try {
                         $productUrl = $link->getProductLink((int) $p['id_product']);
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         $productUrl = null;
                     }
                 }
@@ -835,7 +835,7 @@ class FullmetrixConnector extends Module
                 $discountTotal = abs((float) $cart->getOrderTotal(true, Cart::ONLY_DISCOUNTS));
                 $shippingTotal = (float) $cart->getOrderTotal(true, Cart::ONLY_SHIPPING);
                 $taxTotal = $totalWithTax - $totalNoTax;
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // Totals fail when no address/carrier is set (guest visitors).
                 // Fall back to summed line totals so we still have a usable snapshot.
                 foreach ($items as $i) {
@@ -854,21 +854,21 @@ class FullmetrixConnector extends Module
                         }
                     }
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $couponCodes = [];
             }
 
             $recoveryUrl = null;
             try {
                 $recoveryUrl = $this->buildCartRecoveryUrl($cart);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $recoveryUrl = null;
             }
 
             $itemCount = 0;
             try {
                 $itemCount = (int) $cart->nbProducts();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 foreach ($items as $i) {
                     $itemCount += (int) $i['quantity'];
                 }
@@ -891,7 +891,7 @@ class FullmetrixConnector extends Module
                 'cart' => $cartSnapshot,
                 'source' => 'server',
             ]);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionCartSave', $e);
         }
     }
@@ -927,12 +927,12 @@ class FullmetrixConnector extends Module
                         }
                     }
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 // Address lookup failed, continue with bare contact data
             }
 
             FullmetrixTrackingSender::enqueueEvent('identify', [], $contact);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionAuthentication', $e);
         }
     }
@@ -964,7 +964,7 @@ class FullmetrixConnector extends Module
                         }
                     }
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $coupons = [];
             }
 
@@ -990,7 +990,7 @@ class FullmetrixConnector extends Module
             }
             $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
             return $baseUrl . $separator . 'fm_cart=' . $encoded . '&fm_cart_sig=' . $signature;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('buildCartRecoveryUrl', $e);
             return null;
         }
@@ -1203,7 +1203,7 @@ class FullmetrixConnector extends Module
             }
 
             return date('d/m/Y H:i', (int) $timestamp);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return '';
         }
     }
@@ -1225,7 +1225,7 @@ class FullmetrixConnector extends Module
             $hours = (int) floor($seconds / 3600);
             $mins = (int) floor(($seconds % 3600) / 60);
             return sprintf($this->l('%d h %d min'), $hours, $mins);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return '';
         }
     }
@@ -1288,7 +1288,7 @@ class FullmetrixConnector extends Module
             Configuration::updateValue('FULLMETRIX_WEBHOOKS_ENABLED', true);
 
             return true;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('registerWithFullmetrix', $e);
             return $this->l('Connection error to Fullmetrix server');
         }
@@ -1297,13 +1297,13 @@ class FullmetrixConnector extends Module
     protected function getStoreSettings()
     {
         $currencyId = (int) Configuration::get('PS_CURRENCY_DEFAULT');
-        $currency = new \Currency($currencyId);
+        $currency = new Currency($currencyId);
         $isoCode = $currency->iso_code ?: 'EUR';
 
         $timezone = Configuration::get('PS_TIMEZONE') ?: 'Europe/Paris';
 
         $langId = (int) Configuration::get('PS_LANG_DEFAULT');
-        $lang = new \Language($langId);
+        $lang = new Language($langId);
         $locale = $lang->locale ?: $lang->language_code ?: 'fr-FR';
 
         $format = (int) $currency->format;
@@ -1337,7 +1337,7 @@ class FullmetrixConnector extends Module
             $physicalUri = $this->context->shop->physical_uri;
             $shopUrl = ($ssl ? 'https://' : 'http://') . $domain . $physicalUri;
             return rtrim($shopUrl, '/');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return Tools::getShopDomainSsl(true);
         }
     }

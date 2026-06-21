@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 {
-    const MAX_REQUEST_BODY_BYTES = 1048576;
+    public const MAX_REQUEST_BODY_BYTES = 1048576;
 
     public $ssl = true;
     public $ajax = true;
@@ -32,7 +32,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         try {
             parent::init();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             /* intentionally empty */
         }
 
@@ -68,7 +68,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             }
 
             $this->handleExport();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             FullmetrixLogger::logException('api_displayAjax', $e);
             $this->sendJsonError('Server error', 500);
@@ -159,12 +159,12 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             return;
         }
 
-        $cartRule = new \CartRule();
+        $cartRule = new CartRule();
         $cartRule->code = pSQL($payload['code']);
         $cartRule->active = true;
 
         // Name is multilang in PrestaShop
-        $languages = \Language::getLanguages(false);
+        $languages = Language::getLanguages(false);
         $name = !empty($payload['description']) ? $payload['description'] : $payload['code'];
         foreach ($languages as $lang) {
             $cartRule->name[$lang['id_lang']] = $name;
@@ -193,8 +193,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             return;
         }
 
-        $cartRule = new \CartRule((int) $payload['id']);
-        if (!\Validate::isLoadedObject($cartRule)) {
+        $cartRule = new CartRule((int) $payload['id']);
+        if (!Validate::isLoadedObject($cartRule)) {
             $this->sendJsonError('Cart rule not found', 404);
             return;
         }
@@ -204,7 +204,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         if (isset($payload['description'])) {
-            $languages = \Language::getLanguages(false);
+            $languages = Language::getLanguages(false);
             foreach ($languages as $lang) {
                 $cartRule->name[$lang['id_lang']] = $payload['description'];
             }
@@ -233,8 +233,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             return;
         }
 
-        $cartRule = new \CartRule((int) $payload['id']);
-        if (!\Validate::isLoadedObject($cartRule)) {
+        $cartRule = new CartRule((int) $payload['id']);
+        if (!Validate::isLoadedObject($cartRule)) {
             $this->sendJsonError('Cart rule not found', 404);
             return;
         }
@@ -319,7 +319,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         if (isset($payload['emailRestrictions']) && is_array($payload['emailRestrictions']) && !empty($payload['emailRestrictions'])) {
             $email = trim($payload['emailRestrictions'][0]);
             if (!empty($email)) {
-                $idCustomer = (int) \Db::getInstance()->getValue(
+                $idCustomer = (int) Db::getInstance()->getValue(
                     'SELECT id_customer FROM ' . _DB_PREFIX_ . 'customer WHERE email = "' . pSQL($email) . '" AND deleted = 0 LIMIT 1'
                 );
                 if ($idCustomer > 0) {
@@ -521,7 +521,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
     private function handleCounts()
     {
-        $db = \Db::getInstance();
+        $db = Db::getInstance();
         $prefix = _DB_PREFIX_;
 
         $orders = (int) $db->getValue("SELECT COUNT(*) FROM `{$prefix}orders` WHERE `id_order` > 0");
@@ -558,7 +558,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     {
         // Currency
         $currencyId = (int) Configuration::get('PS_CURRENCY_DEFAULT');
-        $currency = new \Currency($currencyId);
+        $currency = new Currency($currencyId);
         $isoCode = $currency->iso_code ?: 'EUR';
 
         // Timezone
@@ -566,7 +566,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         // Locale
         $langId = (int) Configuration::get('PS_LANG_DEFAULT');
-        $lang = new \Language($langId);
+        $lang = new Language($langId);
         $locale = $lang->locale ?: $lang->language_code ?: 'fr-FR';
 
         // Currency format

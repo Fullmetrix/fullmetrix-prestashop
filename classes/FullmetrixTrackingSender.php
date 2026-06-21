@@ -118,7 +118,7 @@ class FullmetrixTrackingSender
             $totalTimeoutMs = $clientDetached ? 3000 : 800;
 
             self::curlPost($apiUrl, $payload, $headers, $connectTimeoutMs, $totalTimeoutMs);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             FullmetrixLogger::logException('trackingSender_flush', $e);
         }
 

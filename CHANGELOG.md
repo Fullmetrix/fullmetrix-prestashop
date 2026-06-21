@@ -4,6 +4,28 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.5.3
+
+### Added
+
+- Adds a `shop` object to streamed and webhook payloads for orders, refunds,
+  customers, products, product variations, categories and coupons. The payload
+  includes the PrestaShop shop id, shop group id, names, public URL and active
+  status where available.
+- Adds `customer_groups` to customer payloads and order payloads, including the
+  default group id/name plus all assigned group ids/names.
+- Adds coupon restriction metadata for customer groups and shops so future
+  Fullmetrix features can map PrestaShop B2B and multi-shop rules without a
+  historical resync.
+
+### Notes
+
+- This release intentionally keeps the new PrestaShop metadata in the raw sync
+  JSON. It does not yet expose shop or customer-group fields in Fullmetrix
+  dashboards, segmentation or filters.
+- Native PrestaShop carts remain out of scope. Cart analytics continue to rely
+  on Fullmetrix universal tracking.
+
 ## 1.5.0
 
 A stability release focused on guaranteeing that the connector cannot crash

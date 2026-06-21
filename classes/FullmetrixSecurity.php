@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixSecurity
 {
-    const TIMESTAMP_TOLERANCE = 300000;
+    public const TIMESTAMP_TOLERANCE = 300000;
 
     public static function verifySignature($secret, $body, $signature, $timestamp)
     {

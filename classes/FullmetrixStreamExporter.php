@@ -21,10 +21,11 @@ class FullmetrixStreamExporter
     private $link;
     private $orderColumnsCache;
     private $cartRuleColumnsCache;
+    private $shopContextCache = [];
 
     /**
      * @param int $idShop Shop ID
-     * @param \Link|null $link PrestaShop Link instance for URL generation
+     * @param Link|null $link PrestaShop Link instance for URL generation
      */
     public function __construct($idShop = 1, $link = null)
     {
@@ -73,6 +74,7 @@ class FullmetrixStreamExporter
             'ps_version' => _PS_VERSION_,
             'memory_limit' => ini_get('memory_limit'),
             'batch_size' => $this->batchSize,
+            'shop' => $this->getShopContext(),
         ]);
 
         $count = 0;
@@ -98,7 +100,7 @@ class FullmetrixStreamExporter
                     $count = $this->streamCouponsFast($syncType, $since);
                     break;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (!class_exists('FullmetrixLogger')) {
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
@@ -135,6 +137,7 @@ class FullmetrixStreamExporter
             'ps_version' => _PS_VERSION_,
             'memory_limit' => ini_get('memory_limit'),
             'batch_size' => $this->batchSize,
+            'shop' => $this->getShopContext(),
         ]);
 
         $counts = [
@@ -173,6 +176,7 @@ class FullmetrixStreamExporter
             'ps_version' => _PS_VERSION_,
             'memory_limit' => ini_get('memory_limit'),
             'batch_size' => $this->batchSize,
+            'shop' => $this->getShopContext(),
         ]);
 
         $count = $this->streamOrdersFast($syncType, $since);
@@ -242,7 +246,7 @@ class FullmetrixStreamExporter
                     $cols[$row['Field']] = true;
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // Fallback: assume columns don't exist
         }
 
@@ -272,6 +276,7 @@ class FullmetrixStreamExporter
                 : ', 0 AS total_wrapping_tax_incl';
 
             $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
+                       o.id_shop, o.id_shop_group,
                        o.id_address_delivery, o.id_address_invoice,
                        o.current_state, o.module AS payment_method,
                        o.payment AS payment_method_title,
@@ -285,7 +290,7 @@ class FullmetrixStreamExporter
                        ' . $noteCol . ',
                        o.date_add, o.date_upd,
                        osl.name AS status_name,
-                       c.email AS customer_email,
+                       c.email AS customer_email, c.id_default_group,
                        cur.iso_code AS currency_code
                 FROM ' . $this->prefix . 'orders o
                 LEFT JOIN ' . $this->prefix . 'order_state_lang osl
@@ -310,15 +315,20 @@ class FullmetrixStreamExporter
             $orderIds = [];
             $addressIds = [];
             $references = [];
+            $customerIds = [];
             foreach ($rows as $row) {
                 $oid = (int) $row['id_order'];
                 $orderIds[] = $oid;
                 $addressIds[] = (int) $row['id_address_invoice'];
                 $addressIds[] = (int) $row['id_address_delivery'];
                 $references[] = pSQL($row['reference']);
+                if (!empty($row['id_customer'])) {
+                    $customerIds[] = (int) $row['id_customer'];
+                }
             }
             $orderIdsList = implode(',', $orderIds);
             $addressIds = array_unique(array_filter($addressIds));
+            $customerIds = array_unique(array_filter($customerIds));
 
             // Batch: addresses
             $addressMap = $this->batchLoadAddresses($addressIds);
@@ -335,6 +345,9 @@ class FullmetrixStreamExporter
             // Batch: payments
             $paymentMap = $this->batchLoadOrderPayments($references);
 
+            // Batch: customer groups
+            $customerGroupsMap = $this->batchLoadCustomerGroups(implode(',', $customerIds));
+
             foreach ($rows as $row) {
                 $oid = (int) $row['id_order'];
                 $totalTaxIncl = (float) $row['total_paid_tax_incl'];
@@ -349,11 +362,19 @@ class FullmetrixStreamExporter
 
                 // Add email to billing from customer
                 $billing['email'] = (string) ($row['customer_email'] ?? '');
+                $shop = $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0));
+                $customerGroups = $this->formatCustomerGroups(
+                    (int) $row['id_customer'],
+                    (int) ($row['id_default_group'] ?? 0),
+                    $customerGroupsMap
+                );
 
                 $this->sendLine([
                     'type' => 'order',
                     'data' => [
                         'id' => $oid,
+                        'shop' => $shop,
+                        'customer_groups' => $customerGroups,
                         'number' => (string) ($row['reference'] ?: $oid),
                         'status' => (string) ($row['status_name'] ?: 'unknown'),
                         'currency' => (string) ($row['currency_code'] ?: 'EUR'),
@@ -384,7 +405,7 @@ class FullmetrixStreamExporter
             }
 
             $lastId = (int) end($rows)['id_order'];
-            unset($rows, $addressMap, $lineItemsMap, $carriersMap, $couponMap, $paymentMap);
+            unset($rows, $addressMap, $lineItemsMap, $carriersMap, $couponMap, $paymentMap, $customerGroupsMap);
             $this->adaptBatchSize();
             $this->maybeGc();
         }
@@ -537,7 +558,7 @@ class FullmetrixStreamExporter
             if (is_array($result) && count($result) > 0) {
                 $hasValueTaxIncl = true;
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             /* intentionally empty */
         }
 
@@ -619,8 +640,10 @@ class FullmetrixStreamExporter
             $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
                        os.total_products_tax_incl, os.total_shipping_tax_incl,
                        os.amount, os.shipping_cost_amount,
-                       os.date_add, os.date_upd
+                       os.date_add, os.date_upd,
+                       o.id_shop, o.id_shop_group
                 FROM ' . $this->prefix . 'order_slip os
+                LEFT JOIN ' . $this->prefix . 'orders o ON (os.id_order = o.id_order)
                 WHERE os.id_order_slip > ' . (int) $lastId . $sinceWhere . '
                 ORDER BY os.id_order_slip ASC
                 LIMIT ' . $this->batchSize;
@@ -653,6 +676,7 @@ class FullmetrixStreamExporter
                     'type' => 'refund',
                     'data' => [
                         'id' => $sid,
+                        'shop' => $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0)),
                         'parent_id' => (int) $row['id_order'],
                         'amount' => (string) round(abs($totalAmount), 2),
                         'reason' => '',
@@ -718,6 +742,7 @@ class FullmetrixStreamExporter
             $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
                        c.company, c.birthday, c.newsletter, c.optin,
                        c.website, c.siret, c.ape, c.note,
+                       c.id_shop, c.id_shop_group,
                        c.id_gender, c.id_default_group,
                        c.date_add, c.date_upd,
                        gl.name AS gender_name
@@ -750,6 +775,9 @@ class FullmetrixStreamExporter
             // Batch: stats
             $statsMap = $this->batchLoadCustomerStats($customerIdsList);
 
+            // Batch: groups
+            $groupsMap = $this->batchLoadCustomerGroups($customerIdsList);
+
             foreach ($rows as $row) {
                 $cid = (int) $row['id_customer'];
                 $addresses = $addrMap[$cid] ?? [];
@@ -770,8 +798,15 @@ class FullmetrixStreamExporter
                 $country = $billing['country'] ?: ($shipping['country'] ?? '');
 
                 $metaData = [];
+                $customerGroups = $this->formatCustomerGroups($cid, (int) ($row['id_default_group'] ?? 0), $groupsMap);
                 if (!empty($row['newsletter'])) {
                     $metaData[] = ['key' => 'newsletter', 'value' => (string) $row['newsletter']];
+                }
+                if (!empty($customerGroups['default_group_id'])) {
+                    $metaData[] = ['key' => 'default_group_id', 'value' => (string) $customerGroups['default_group_id']];
+                }
+                if (!empty($customerGroups['default_group_name'])) {
+                    $metaData[] = ['key' => 'default_group_name', 'value' => (string) $customerGroups['default_group_name']];
                 }
                 if (!empty($row['birthday']) && $row['birthday'] !== '0000-00-00') {
                     $metaData[] = ['key' => 'birthday', 'value' => (string) $row['birthday']];
@@ -791,6 +826,8 @@ class FullmetrixStreamExporter
                     'type' => 'customer',
                     'data' => [
                         'id' => $cid,
+                        'shop' => $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0)),
+                        'customer_groups' => $customerGroups,
                         'email' => (string) $row['email'],
                         'first_name' => (string) $row['firstname'],
                         'last_name' => (string) $row['lastname'],
@@ -809,7 +846,7 @@ class FullmetrixStreamExporter
             }
 
             $lastId = (int) end($rows)['id_customer'];
-            unset($rows, $addrMap, $statsMap);
+            unset($rows, $addrMap, $statsMap, $groupsMap);
             $this->adaptBatchSize();
             $this->maybeGc();
         }
@@ -933,6 +970,7 @@ class FullmetrixStreamExporter
             $combosMap = $this->batchLoadCombinations($productIdsList);
             $suppliersMap = $this->batchLoadProductSuppliers($productIdsList);
             $featuresMap = $this->batchLoadProductFeatures($productIdsList);
+            $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
                 $pid = (int) $row['id_product'];
@@ -949,6 +987,7 @@ class FullmetrixStreamExporter
                     'type' => 'product',
                     'data' => [
                         'id' => $pid,
+                        'shop' => $shop,
                         'name' => (string) ($row['name'] ?? ''),
                         'slug' => (string) ($row['link_rewrite'] ?? ''),
                         'permalink' => $this->link->getProductLink($pid),
@@ -1005,6 +1044,7 @@ class FullmetrixStreamExporter
                             'type' => 'product',
                             'data' => [
                                 'id' => $pid . '_' . $aid,
+                                'shop' => $shop,
                                 'name' => $comboName,
                                 'slug' => (string) ($row['link_rewrite'] ?? ''),
                                 'permalink' => $this->link->getProductLink($pid, null, null, null, null, null, $aid),
@@ -1300,6 +1340,7 @@ class FullmetrixStreamExporter
                     $countMap[(int) $cr['id_category']] = (int) $cr['cnt'];
                 }
             }
+            $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
                 $cid = (int) $row['id_category'];
@@ -1307,6 +1348,7 @@ class FullmetrixStreamExporter
                     'type' => 'category',
                     'data' => [
                         'id' => $cid,
+                        'shop' => $shop,
                         'name' => (string) ($row['name'] ?? ''),
                         'slug' => (string) ($row['link_rewrite'] ?? ''),
                         'parent_id' => (int) $row['id_parent'] ?: null,
@@ -1347,6 +1389,7 @@ class FullmetrixStreamExporter
             $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
                        cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
                        cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
+                       cr.group_restriction, cr.shop_restriction,
                        cr.minimum_amount, cr.minimum_amount_currency,
                        cr.date_from, cr.date_to, cr.date_add,
                        crl.name
@@ -1380,6 +1423,8 @@ class FullmetrixStreamExporter
                     $usageMap[(int) $ur['id_cart_rule']] = (int) $ur['cnt'];
                 }
             }
+            $restrictionsMap = $this->batchLoadCartRuleRestrictions($crIdsList);
+            $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
                 $crId = (int) $row['id_cart_rule'];
@@ -1394,6 +1439,7 @@ class FullmetrixStreamExporter
                     'type' => 'coupon',
                     'data' => [
                         'id' => $crId,
+                        'shop' => $shop,
                         'code' => (string) ($row['code'] ?? ''),
                         'description' => (string) ($row['description'] ?? ''),
                         'discount_type' => $discountType,
@@ -1404,6 +1450,12 @@ class FullmetrixStreamExporter
                         'free_shipping' => (bool) $row['free_shipping'],
                         'minimum_amount' => (string) ((float) ($row['minimum_amount'] ?? 0)),
                         'maximum_amount' => null,
+                        'restrictions' => [
+                            'group_restriction' => !empty($row['group_restriction']),
+                            'shop_restriction' => !empty($row['shop_restriction']),
+                            'groups' => $restrictionsMap[$crId]['groups'] ?? [],
+                            'shops' => $restrictionsMap[$crId]['shops'] ?? [],
+                        ],
                         'date_created' => $this->toIso($row['date_add']),
                         'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
                             ? $this->toIso($row['date_to']) : null,
@@ -1413,7 +1465,7 @@ class FullmetrixStreamExporter
             }
 
             $lastId = (int) end($rows)['id_cart_rule'];
-            unset($rows);
+            unset($rows, $restrictionsMap);
             $this->adaptBatchSize();
             $this->maybeGc();
         }
@@ -1440,9 +1492,177 @@ class FullmetrixStreamExporter
             $physicalUri = defined('__PS_BASE_URI__') ? __PS_BASE_URI__ : '/';
 
             return rtrim(($ssl ? 'https://' : 'http://') . $domain . $physicalUri, '/');
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return 'https://unknown';
         }
+    }
+
+    private function getShopContext($idShop = null, $idShopGroup = null)
+    {
+        $shopId = (int) ($idShop ?: $this->idShop);
+        if ($shopId <= 0) {
+            $shopId = (int) $this->idShop;
+        }
+
+        if (isset($this->shopContextCache[$shopId])) {
+            return $this->shopContextCache[$shopId];
+        }
+
+        $context = [
+            'id' => $shopId,
+            'group_id' => $idShopGroup !== null ? (int) $idShopGroup : null,
+            'group_name' => null,
+            'name' => '',
+            'url' => $this->getStoreUrl(),
+            'active' => true,
+        ];
+
+        try {
+            $sql = 'SELECT s.id_shop, s.id_shop_group, s.name, s.active,
+                       sg.name AS group_name,
+                       su.domain, su.domain_ssl, su.physical_uri, su.virtual_uri
+                FROM ' . $this->prefix . 'shop s
+                LEFT JOIN ' . $this->prefix . 'shop_group sg ON (s.id_shop_group = sg.id_shop_group)
+                LEFT JOIN ' . $this->prefix . 'shop_url su
+                    ON (s.id_shop = su.id_shop AND su.main = 1 AND su.active = 1)
+                WHERE s.id_shop = ' . (int) $shopId;
+            $row = $this->db->getRow($sql);
+            if (is_array($row) && !empty($row)) {
+                $ssl = Configuration::get('PS_SSL_ENABLED') || Tools::usingSecureMode();
+                $domain = $ssl && !empty($row['domain_ssl']) ? $row['domain_ssl'] : ($row['domain'] ?? '');
+                if (empty($domain) && !empty($row['domain_ssl'])) {
+                    $domain = $row['domain_ssl'];
+                }
+
+                $physicalUri = isset($row['physical_uri']) ? (string) $row['physical_uri'] : '/';
+                $virtualUri = isset($row['virtual_uri']) ? (string) $row['virtual_uri'] : '';
+                $baseUri = '/' . trim($physicalUri . $virtualUri, '/') . '/';
+                if ($baseUri === '//') {
+                    $baseUri = '/';
+                }
+
+                $context = [
+                    'id' => (int) $row['id_shop'],
+                    'group_id' => (int) $row['id_shop_group'],
+                    'group_name' => isset($row['group_name']) ? (string) $row['group_name'] : null,
+                    'name' => (string) ($row['name'] ?? ''),
+                    'url' => $domain ? rtrim(($ssl ? 'https://' : 'http://') . $domain . $baseUri, '/') : $context['url'],
+                    'active' => !empty($row['active']),
+                ];
+            }
+        } catch (Throwable $e) {
+            // Keep the fallback context.
+        }
+
+        $this->shopContextCache[$shopId] = $context;
+
+        return $context;
+    }
+
+    private function batchLoadCustomerGroups($customerIdsList)
+    {
+        if (trim((string) $customerIdsList) === '') {
+            return [];
+        }
+
+        $sql = 'SELECT cg.id_customer, cg.id_group, gl.name
+            FROM ' . $this->prefix . 'customer_group cg
+            LEFT JOIN ' . $this->prefix . 'group_lang gl
+                ON (cg.id_group = gl.id_group AND gl.id_lang = ' . $this->idLang . ')
+            WHERE cg.id_customer IN (' . $customerIdsList . ')
+            ORDER BY cg.id_customer ASC, cg.id_group ASC';
+
+        $rows = $this->safeQuery($sql, 'customer_groups');
+        $map = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $cid = (int) $row['id_customer'];
+                $group = [
+                    'id' => (int) $row['id_group'],
+                    'name' => (string) ($row['name'] ?? ''),
+                ];
+                $map[$cid][] = $group;
+            }
+        }
+
+        return $map;
+    }
+
+    private function formatCustomerGroups($customerId, $defaultGroupId, $groupsMap)
+    {
+        $defaultGroupId = (int) $defaultGroupId;
+        $groups = isset($groupsMap[$customerId]) && is_array($groupsMap[$customerId]) ? $groupsMap[$customerId] : [];
+        $groupIds = [];
+        $groupNames = [];
+        $defaultGroupName = null;
+
+        foreach ($groups as $group) {
+            $groupIds[] = (int) $group['id'];
+            $groupNames[] = (string) $group['name'];
+            if ((int) $group['id'] === $defaultGroupId) {
+                $defaultGroupName = (string) $group['name'];
+            }
+        }
+
+        return [
+            'default_group_id' => $defaultGroupId > 0 ? $defaultGroupId : null,
+            'default_group_name' => $defaultGroupName,
+            'group_ids' => $groupIds,
+            'group_names' => $groupNames,
+            'groups' => $groups,
+        ];
+    }
+
+    private function batchLoadCartRuleRestrictions($cartRuleIdsList)
+    {
+        if (trim((string) $cartRuleIdsList) === '') {
+            return [];
+        }
+
+        $map = [];
+
+        $groupRows = $this->safeQuery(
+            'SELECT crg.id_cart_rule, crg.id_group, gl.name
+                FROM ' . $this->prefix . 'cart_rule_group crg
+                LEFT JOIN ' . $this->prefix . 'group_lang gl
+                    ON (crg.id_group = gl.id_group AND gl.id_lang = ' . $this->idLang . ')
+                WHERE crg.id_cart_rule IN (' . $cartRuleIdsList . ')
+                ORDER BY crg.id_cart_rule ASC, crg.id_group ASC',
+            'cart_rule_group_restrictions'
+        );
+        if (is_array($groupRows)) {
+            foreach ($groupRows as $row) {
+                $id = (int) $row['id_cart_rule'];
+                if (!isset($map[$id])) {
+                    $map[$id] = ['groups' => [], 'shops' => []];
+                }
+                $map[$id]['groups'][] = [
+                    'id' => (int) $row['id_group'],
+                    'name' => (string) ($row['name'] ?? ''),
+                ];
+            }
+        }
+
+        $shopRows = $this->safeQuery(
+            'SELECT crs.id_cart_rule, s.id_shop, s.id_shop_group, s.name
+                FROM ' . $this->prefix . 'cart_rule_shop crs
+                LEFT JOIN ' . $this->prefix . 'shop s ON (crs.id_shop = s.id_shop)
+                WHERE crs.id_cart_rule IN (' . $cartRuleIdsList . ')
+                ORDER BY crs.id_cart_rule ASC, s.id_shop ASC',
+            'cart_rule_shop_restrictions'
+        );
+        if (is_array($shopRows)) {
+            foreach ($shopRows as $row) {
+                $id = (int) $row['id_cart_rule'];
+                if (!isset($map[$id])) {
+                    $map[$id] = ['groups' => [], 'shops' => []];
+                }
+                $map[$id]['shops'][] = $this->getShopContext((int) $row['id_shop'], (int) $row['id_shop_group']);
+            }
+        }
+
+        return $map;
     }
 
     private function safeQuery($sql, $context = '', $retries = 2)
@@ -1450,7 +1670,7 @@ class FullmetrixStreamExporter
         for ($attempt = 0; $attempt <= $retries; ++$attempt) {
             try {
                 $rows = $this->db->executeS($sql);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 if ($attempt < $retries) {
                     usleep(200000 * ($attempt + 1)); // 200ms, 400ms
                     continue;
@@ -1503,7 +1723,7 @@ class FullmetrixStreamExporter
             if ($row && $row['next_id'] !== null) {
                 return (int) $row['next_id'] - 1; // -1 because queries use > lastId
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // fallback
         }
 
@@ -1529,7 +1749,7 @@ class FullmetrixStreamExporter
                     }
                 }
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // memory housekeeping is best-effort
         }
     }
@@ -1546,7 +1766,7 @@ class FullmetrixStreamExporter
             } elseif ($memPct < 0.4 && $this->batchSize < 2000) {
                 $this->batchSize = min(2000, (int) ($this->batchSize * 1.5));
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // batch tuning is best-effort
         }
     }
@@ -1572,6 +1792,7 @@ class FullmetrixStreamExporter
      *
      * @param string $entityType order|customer|product|category|coupon|refund
      * @param int|string $id
+     *
      * @return array|null
      */
     public function formatSingleEntity($entityType, $id)
@@ -1608,6 +1829,7 @@ class FullmetrixStreamExporter
         $noteCol = $optionalCols['note'] ? ', o.note' : ', \'\' AS note';
 
         $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
+                   o.id_shop, o.id_shop_group,
                    o.id_address_delivery, o.id_address_invoice,
                    o.current_state, o.module AS payment_method,
                    o.payment AS payment_method_title,
@@ -1621,7 +1843,7 @@ class FullmetrixStreamExporter
                    ' . $noteCol . ',
                    o.date_add, o.date_upd,
                    osl.name AS status_name,
-                   c.email AS customer_email,
+                   c.email AS customer_email, c.id_default_group,
                    cur.iso_code AS currency_code
             FROM ' . $this->prefix . 'orders o
             LEFT JOIN ' . $this->prefix . 'order_state_lang osl
@@ -1645,6 +1867,7 @@ class FullmetrixStreamExporter
         $carriersMap = $this->batchLoadOrderCarriers((string) $orderId);
         $couponMap = $this->batchLoadOrderCartRules((string) $orderId);
         $paymentMap = $this->batchLoadOrderPayments([pSQL($row['reference'])]);
+        $customerGroupsMap = $this->batchLoadCustomerGroups((string) ((int) $row['id_customer']));
 
         $totalTaxIncl = (float) $row['total_paid_tax_incl'];
         $totalTaxExcl = (float) $row['total_paid_tax_excl'];
@@ -1656,6 +1879,8 @@ class FullmetrixStreamExporter
 
         return [
             'id' => $orderId,
+            'shop' => $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0)),
+            'customer_groups' => $this->formatCustomerGroups((int) $row['id_customer'], (int) ($row['id_default_group'] ?? 0), $customerGroupsMap),
             'number' => (string) ($row['reference'] ?: $orderId),
             'status' => (string) ($row['status_name'] ?: 'unknown'),
             'currency' => (string) ($row['currency_code'] ?: 'EUR'),
@@ -1686,7 +1911,8 @@ class FullmetrixStreamExporter
     {
         $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
                    c.company, c.birthday, c.newsletter, c.optin,
-                   c.id_gender, c.date_add, c.date_upd,
+                   c.id_shop, c.id_shop_group,
+                   c.id_gender, c.id_default_group, c.date_add, c.date_upd,
                    gl.name AS gender_name
             FROM ' . $this->prefix . 'customer c
             LEFT JOIN ' . $this->prefix . 'gender_lang gl
@@ -1701,6 +1927,7 @@ class FullmetrixStreamExporter
 
         $addrMap = $this->batchLoadCustomerAddresses((string) $customerId);
         $statsMap = $this->batchLoadCustomerStats((string) $customerId);
+        $groupsMap = $this->batchLoadCustomerGroups((string) $customerId);
 
         $addresses = $addrMap[$customerId] ?? [];
         $stats = $statsMap[$customerId] ?? ['order_count' => 0, 'total_spent' => 0];
@@ -1717,8 +1944,15 @@ class FullmetrixStreamExporter
         $country = $billing['country'] ?: ($shipping['country'] ?? '');
 
         $metaData = [];
+        $customerGroups = $this->formatCustomerGroups($customerId, (int) ($row['id_default_group'] ?? 0), $groupsMap);
         if (!empty($row['newsletter'])) {
             $metaData[] = ['key' => 'newsletter', 'value' => (string) $row['newsletter']];
+        }
+        if (!empty($customerGroups['default_group_id'])) {
+            $metaData[] = ['key' => 'default_group_id', 'value' => (string) $customerGroups['default_group_id']];
+        }
+        if (!empty($customerGroups['default_group_name'])) {
+            $metaData[] = ['key' => 'default_group_name', 'value' => (string) $customerGroups['default_group_name']];
         }
         if (!empty($row['birthday']) && $row['birthday'] !== '0000-00-00') {
             $metaData[] = ['key' => 'birthday', 'value' => (string) $row['birthday']];
@@ -1733,6 +1967,8 @@ class FullmetrixStreamExporter
 
         return [
             'id' => $customerId,
+            'shop' => $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0)),
+            'customer_groups' => $customerGroups,
             'email' => (string) $row['email'],
             'first_name' => (string) $row['firstname'],
             'last_name' => (string) $row['lastname'],
@@ -1790,6 +2026,7 @@ class FullmetrixStreamExporter
 
         return [
             'id' => $pid,
+            'shop' => $this->getShopContext(),
             'name' => (string) ($row['name'] ?? ''),
             'slug' => (string) ($row['link_rewrite'] ?? ''),
             'permalink' => $this->link->getProductLink($pid),
@@ -1846,6 +2083,7 @@ class FullmetrixStreamExporter
 
         return [
             'id' => (int) $row['id_category'],
+            'shop' => $this->getShopContext(),
             'name' => (string) ($row['name'] ?? ''),
             'slug' => (string) ($row['link_rewrite'] ?? ''),
             'parent_id' => (int) $row['id_parent'] ?: null,
@@ -1860,6 +2098,7 @@ class FullmetrixStreamExporter
         $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
                    cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
                    cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
+                   cr.group_restriction, cr.shop_restriction,
                    cr.minimum_amount, cr.minimum_amount_currency,
                    cr.date_from, cr.date_to, cr.date_add,
                    crl.name,
@@ -1883,9 +2122,11 @@ class FullmetrixStreamExporter
             $discountType = 'percent';
             $amount = (float) $row['reduction_percent'];
         }
+        $restrictionsMap = $this->batchLoadCartRuleRestrictions((string) $cartRuleId);
 
         return [
             'id' => (int) $row['id_cart_rule'],
+            'shop' => $this->getShopContext(),
             'code' => (string) ($row['code'] ?? ''),
             'description' => (string) ($row['description'] ?? ''),
             'discount_type' => $discountType,
@@ -1896,6 +2137,12 @@ class FullmetrixStreamExporter
             'free_shipping' => (bool) $row['free_shipping'],
             'minimum_amount' => (string) ((float) ($row['minimum_amount'] ?? 0)),
             'maximum_amount' => null,
+            'restrictions' => [
+                'group_restriction' => !empty($row['group_restriction']),
+                'shop_restriction' => !empty($row['shop_restriction']),
+                'groups' => $restrictionsMap[$cartRuleId]['groups'] ?? [],
+                'shops' => $restrictionsMap[$cartRuleId]['shops'] ?? [],
+            ],
             'date_created' => $this->toIso($row['date_add']),
             'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
                 ? $this->toIso($row['date_to']) : null,
@@ -1907,8 +2154,10 @@ class FullmetrixStreamExporter
         $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
                    os.total_products_tax_incl, os.total_shipping_tax_incl,
                    os.amount, os.shipping_cost_amount,
-                   os.date_add
+                   os.date_add,
+                   o.id_shop, o.id_shop_group
             FROM ' . $this->prefix . 'order_slip os
+            LEFT JOIN ' . $this->prefix . 'orders o ON (os.id_order = o.id_order)
             WHERE os.id_order_slip = ' . $slipId;
 
         $rows = $this->safeQuery($sql, 'single_refund');
@@ -1925,6 +2174,7 @@ class FullmetrixStreamExporter
 
         return [
             'id' => (int) $row['id_order_slip'],
+            'shop' => $this->getShopContext((int) ($row['id_shop'] ?? $this->idShop), (int) ($row['id_shop_group'] ?? 0)),
             'parent_id' => (int) $row['id_order'],
             'amount' => (string) round(abs($totalAmount), 2),
             'reason' => '',
