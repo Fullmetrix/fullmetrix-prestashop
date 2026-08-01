@@ -4,6 +4,14 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.5.4
+
+### Added
+
+- Adds tax-inclusive displayed, regular and sale prices to products and combinations.
+- Adds tax-inclusive pre-discount prices and tax amounts to order lines.
+- Sends product and combination updates when combinations or specific prices change.
+
 ## 1.5.3
 
 ### Added

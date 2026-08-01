@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    public const FULLMETRIX_VERSION = '1.5.3';
+    public const FULLMETRIX_VERSION = '1.5.4';
     public const FULLMETRIX_CHANNEL = 'community';
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
@@ -83,7 +83,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.3';
+        $this->version = '1.5.4';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -121,6 +121,12 @@ class FullmetrixConnector extends Module
             && $this->registerHook('actionObjectCustomerUpdateAfter')
             && $this->registerHook('actionProductUpdate')
             && $this->registerHook('actionProductAdd')
+            && $this->registerHook('actionObjectCombinationAddAfter')
+            && $this->registerHook('actionObjectCombinationUpdateAfter')
+            && $this->registerHook('actionObjectCombinationDeleteAfter')
+            && $this->registerHook('actionObjectSpecificPriceAddAfter')
+            && $this->registerHook('actionObjectSpecificPriceUpdateAfter')
+            && $this->registerHook('actionObjectSpecificPriceDeleteAfter')
             && $this->registerHook('actionUpdateQuantity')
             && $this->registerHook('actionObjectCartRuleUpdateAfter')
             && $this->registerHook('actionOrderSlipAdd')
@@ -664,9 +670,9 @@ class FullmetrixConnector extends Module
                 return;
             }
             if (isset($params['id_product'])) {
-                FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+                $this->enqueueProductAndCombinations((int) $params['id_product']);
             } elseif (isset($params['product']) && is_object($params['product'])) {
-                FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+                $this->enqueueProductAndCombinations((int) $params['product']->id);
             }
         } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionProductUpdate', $e);
@@ -680,12 +686,85 @@ class FullmetrixConnector extends Module
                 return;
             }
             if (isset($params['id_product'])) {
-                FullmetrixWebhookSender::enqueue('product', (int) $params['id_product']);
+                $this->enqueueProductAndCombinations((int) $params['id_product']);
             } elseif (isset($params['product']) && is_object($params['product'])) {
-                FullmetrixWebhookSender::enqueue('product', (int) $params['product']->id);
+                $this->enqueueProductAndCombinations((int) $params['product']->id);
             }
         } catch (Throwable $e) {
             FullmetrixLogger::logException('hookActionProductAdd', $e);
+        }
+    }
+
+    public function hookActionObjectCombinationAddAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    public function hookActionObjectCombinationUpdateAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    public function hookActionObjectCombinationDeleteAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    public function hookActionObjectSpecificPriceAddAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    public function hookActionObjectSpecificPriceUpdateAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    public function hookActionObjectSpecificPriceDeleteAfter($params)
+    {
+        $this->enqueueProductPriceObject($params);
+    }
+
+    private function enqueueProductPriceObject($params)
+    {
+        try {
+            if (!self::isActive() || !isset($params['object']) || !is_object($params['object'])) {
+                return;
+            }
+            $productId = isset($params['object']->id_product) ? (int) $params['object']->id_product : 0;
+            if ($productId > 0) {
+                $attributeId = isset($params['object']->id_product_attribute)
+                    ? (int) $params['object']->id_product_attribute
+                    : (isset($params['object']->id) && $params['object'] instanceof Combination ? (int) $params['object']->id : 0);
+                $this->enqueueProductAndCombinations($productId, $attributeId);
+            }
+        } catch (Throwable $e) {
+            FullmetrixLogger::logException('enqueueProductPriceObject', $e);
+        }
+    }
+
+    private function enqueueProductAndCombinations($productId, $attributeId = 0)
+    {
+        if ($productId <= 0) {
+            return;
+        }
+        FullmetrixWebhookSender::enqueue('product', $productId);
+        if ($attributeId > 0) {
+            FullmetrixWebhookSender::enqueue('product', $productId . '_' . $attributeId);
+            return;
+        }
+
+        $rows = Db::getInstance()->executeS(
+            'SELECT id_product_attribute FROM ' . _DB_PREFIX_ . 'product_attribute WHERE id_product = ' . (int) $productId
+        );
+        if (!is_array($rows)) {
+            return;
+        }
+        foreach ($rows as $row) {
+            $combinationId = (int) ($row['id_product_attribute'] ?? 0);
+            if ($combinationId > 0) {
+                FullmetrixWebhookSender::enqueue('product', $productId . '_' . $combinationId);
+            }
         }
     }
 

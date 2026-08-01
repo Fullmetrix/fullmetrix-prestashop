@@ -1,6 +1,6 @@
 {
-  "version": "1.5.3",
+  "version": "1.5.4",
   "minimumRequired": "1.7.4.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Adds raw PrestaShop shop context and customer group data to sync and webhook payloads for staged multi-shop and B2B support."
+  "changelog": "Adds displayed tax-inclusive prices and real-time variation price updates for accurate price history."
 }

@@ -497,7 +497,10 @@ class FullmetrixStreamExporter
                 $pid = (int) $row['product_id'];
                 $aid = (int) $row['product_attribute_id'];
                 $price = (float) $row['unit_price_tax_excl'];
+                $displayPrice = (float) $row['unit_price_tax_incl'];
                 $total = (float) $row['total_price_tax_incl'];
+                $subtotalTax = max(0, ((float) $row['unit_price_tax_incl'] - (float) $row['unit_price_tax_excl']) * $qty);
+                $totalTax = max(0, (float) $row['total_price_tax_incl'] - (float) $row['total_price_tax_excl']);
 
                 $map[$oid][] = [
                     'id' => (int) $row['id_order_detail'],
@@ -506,7 +509,11 @@ class FullmetrixStreamExporter
                     'variation_id' => $aid > 0 ? $pid . '_' . $aid : null,
                     'quantity' => $qty,
                     'price' => (string) round($price, 2),
+                    'display_price' => (string) round($displayPrice, 2),
+                    'subtotal' => (string) round($price * $qty, 2),
+                    'subtotal_tax' => (string) round($subtotalTax, 2),
                     'total' => (string) round($total, 2),
+                    'total_tax' => (string) round($totalTax, 2),
                     'sku' => (string) ($row['product_reference'] ?? ''),
                     'tax_name' => (string) ($row['tax_name'] ?? ''),
                     'tax_rate' => (string) ($row['tax_rate'] ?? '0'),
@@ -982,6 +989,7 @@ class FullmetrixStreamExporter
                 $imageList = array_map(function ($src) { return ['src' => $src]; }, $images);
 
                 $salePrice = $salePriceMap[$pid] ?? null;
+                $displayPrices = $this->getDisplayPriceValues($pid);
 
                 $this->sendLine([
                     'type' => 'product',
@@ -999,6 +1007,10 @@ class FullmetrixStreamExporter
                         'price' => (string) round((float) $row['price'], 2),
                         'regular_price' => (string) round((float) $row['price'], 2),
                         'sale_price' => $salePrice,
+                        'display_price' => $displayPrices['price'],
+                        'display_regular_price' => $displayPrices['regular_price'],
+                        'display_sale_price' => $displayPrices['sale_price'],
+                        'display_price_includes_tax' => true,
                         'on_sale' => !empty($salePrice),
                         'stock_status' => $stockQty > 0 ? 'instock' : 'outofstock',
                         'stock_quantity' => $stockQty,
@@ -1034,6 +1046,7 @@ class FullmetrixStreamExporter
                         $comboRef = (string) ($combo['reference'] ?? $row['reference'] ?? '');
                         $priceImpact = (float) ($combo['price_impact'] ?? 0);
                         $comboPrice = (float) $row['price'] + $priceImpact;
+                        $displayPrices = $this->getDisplayPriceValues($pid, $aid);
 
                         $comboName = (string) ($row['name'] ?? '');
                         if (!empty($combo['attributes'])) {
@@ -1054,6 +1067,10 @@ class FullmetrixStreamExporter
                                 'price' => (string) round($comboPrice, 2),
                                 'regular_price' => (string) round($comboPrice, 2),
                                 'sale_price' => null,
+                                'display_price' => $displayPrices['price'],
+                                'display_regular_price' => $displayPrices['regular_price'],
+                                'display_sale_price' => $displayPrices['sale_price'],
+                                'display_price_includes_tax' => true,
                                 'stock_status' => $comboStock > 0 ? 'instock' : 'outofstock',
                                 'stock_quantity' => $comboStock,
                                 'manage_stock' => true,
@@ -1797,6 +1814,10 @@ class FullmetrixStreamExporter
      */
     public function formatSingleEntity($entityType, $id)
     {
+        if ($entityType === 'product' && preg_match('/^(\d+)_(\d+)$/', (string) $id, $matches)) {
+            return $this->formatSingleProductVariant((int) $matches[1], (int) $matches[2]);
+        }
+
         $id = (int) $id;
         if ($id <= 0) {
             return null;
@@ -2023,6 +2044,7 @@ class FullmetrixStreamExporter
         $imageUrl = !empty($images) ? $images[0] : null;
         $imageList = array_map(function ($src) { return ['src' => $src]; }, $images);
         $salePrice = $salePriceMap[$pid] ?? null;
+        $displayPrices = $this->getDisplayPriceValues($pid);
 
         return [
             'id' => $pid,
@@ -2038,6 +2060,10 @@ class FullmetrixStreamExporter
             'price' => (string) round((float) $row['price'], 2),
             'regular_price' => (string) round((float) $row['price'], 2),
             'sale_price' => $salePrice,
+            'display_price' => $displayPrices['price'],
+            'display_regular_price' => $displayPrices['regular_price'],
+            'display_sale_price' => $displayPrices['sale_price'],
+            'display_price_includes_tax' => true,
             'on_sale' => !empty($salePrice),
             'stock_status' => $stockQty > 0 ? 'instock' : 'outofstock',
             'stock_quantity' => $stockQty,
@@ -2061,6 +2087,94 @@ class FullmetrixStreamExporter
             'date_created' => $this->toIso($row['date_add']),
             'date_modified' => $this->toIso($row['date_upd']),
         ];
+    }
+
+    private function formatSingleProductVariant($productId, $attributeId)
+    {
+        $product = $this->formatSingleProduct($productId);
+        if ($product === null) {
+            return null;
+        }
+
+        $combinations = $this->batchLoadCombinations((string) $productId);
+        $combination = null;
+        foreach ($combinations[$productId] ?? [] as $candidate) {
+            if ((int) $candidate['id_product_attribute'] === $attributeId) {
+                $combination = $candidate;
+                break;
+            }
+        }
+        if ($combination === null) {
+            return null;
+        }
+
+        $displayPrices = $this->getDisplayPriceValues($productId, $attributeId);
+        $regularPrice = (float) $product['regular_price'] + (float) ($combination['price_impact'] ?? 0);
+        $stockQty = min((int) ($combination['quantity'] ?? 0), 2147483647);
+        $name = $product['name'];
+        if (!empty($combination['attributes'])) {
+            $name .= ' - ' . $combination['attributes'];
+        }
+
+        $product['id'] = $productId . '_' . $attributeId;
+        $product['name'] = $name;
+        $product['permalink'] = $this->link->getProductLink($productId, null, null, null, null, null, $attributeId);
+        $product['type'] = 'variation';
+        $product['sku'] = (string) ($combination['reference'] ?? $product['sku']);
+        $product['price'] = (string) round($regularPrice, 2);
+        $product['regular_price'] = (string) round($regularPrice, 2);
+        $product['sale_price'] = null;
+        $product['display_price'] = $displayPrices['price'];
+        $product['display_regular_price'] = $displayPrices['regular_price'];
+        $product['display_sale_price'] = $displayPrices['sale_price'];
+        $product['on_sale'] = $displayPrices['sale_price'] !== null;
+        $product['stock_status'] = $stockQty > 0 ? 'instock' : 'outofstock';
+        $product['stock_quantity'] = $stockQty;
+        $product['ean13'] = (string) ($combination['ean13'] ?? '');
+        $product['upc'] = (string) ($combination['upc'] ?? '');
+        $product['category_ids'] = [];
+        $product['parent_id'] = $productId;
+        $product['images'] = [];
+
+        return $product;
+    }
+
+    private function getDisplayPriceValues($productId, $attributeId = null)
+    {
+        try {
+            $regularPrice = (float) Product::getPriceStatic(
+                (int) $productId,
+                true,
+                $attributeId !== null ? (int) $attributeId : null,
+                6,
+                null,
+                false,
+                false,
+                1
+            );
+            $effectivePrice = (float) Product::getPriceStatic(
+                (int) $productId,
+                true,
+                $attributeId !== null ? (int) $attributeId : null,
+                6,
+                null,
+                false,
+                true,
+                1
+            );
+
+            return [
+                'price' => (string) round($effectivePrice, 2),
+                'regular_price' => (string) round($regularPrice, 2),
+                'sale_price' => $effectivePrice < $regularPrice ? (string) round($effectivePrice, 2) : null,
+            ];
+        } catch (Throwable $e) {
+            return [
+                'price' => null,
+                'regular_price' => null,
+                'sale_price' => null,
+            ];
+        }
     }
 
     private function formatSingleCategory($categoryId)
