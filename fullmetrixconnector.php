@@ -1326,6 +1326,7 @@ class FullmetrixConnector extends Module
             $data = [
                 'connectionCode' => $code,
                 'siteUrl' => $this->getShopUrl(),
+                'storeCanonicalId' => hash('sha256', _COOKIE_KEY_ . ':' . (int) $this->context->shop->id),
                 'pluginVersion' => self::FULLMETRIX_VERSION,
                 'platform' => 'prestashop',
                 'channel' => self::FULLMETRIX_CHANNEL,
