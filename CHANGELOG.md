@@ -19,7 +19,12 @@ project adheres to semantic versioning where practical.
   detached and never reached the browser. `Cookie::isSessionAlive()` then failed
   on the next request and the customer was sent back to the login page. The
   response is now detached only after the pending cookie has been written.
-  Affects PrestaShop 8.2 and later, where customer sessions are token-backed.
+  Affects every PrestaShop from 1.7.6 to 9.x: `Cookie::registerSession()` landed
+  in 1.7.6 and `Customer::isLogged()` has required `isSessionAlive()` ever since.
+  1.7.4 and 1.7.5 are not affected. The regression was introduced in connector
+  1.5.0, which added `fastcgi_finish_request()`; only PHP-FPM and LiteSpeed
+  storefronts are hit, and only when the visitor already carries the tracker
+  cookies that make a hook queue an event during the login request.
 
 ## 1.5.4
 
