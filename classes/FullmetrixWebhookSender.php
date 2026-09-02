@@ -125,10 +125,13 @@ class FullmetrixWebhookSender
     }
 
     /**
-     * Returns true if the response has been flushed to the client (FPM only).
-     * Used to pick longer or shorter timeouts.
+     * Returns true if the response has actually been flushed to the client.
+     *
+     * Callers must ask this, never `function_exists('fastcgi_finish_request')`:
+     * the latter only says FPM is available, not that the visitor has been
+     * released. Anything still on the rendering path is waited on by a browser.
      */
-    private static function isClientDetached()
+    public static function isClientDetached()
     {
         return self::$responseFinished && function_exists('fastcgi_finish_request');
     }

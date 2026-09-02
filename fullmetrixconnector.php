@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    public const FULLMETRIX_VERSION = '1.5.6';
+    public const FULLMETRIX_VERSION = '1.5.7';
     public const FULLMETRIX_CHANNEL = 'community';
 
     /** Lifetime of a signed cart-recovery link, in seconds (30 days). */
@@ -86,7 +86,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.6';
+        $this->version = '1.5.7';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -324,9 +324,12 @@ class FullmetrixConnector extends Module
                 return self::$cachedConfigThisRequest;
             }
 
-            $clientDetached = function_exists('fastcgi_finish_request');
-            $connectTimeoutMs = $clientDetached ? 1000 : 300;
-            $totalTimeoutMs = $clientDetached ? 2000 : 800;
+            // This runs inside hookDisplayHeader, so the visitor is still waiting
+            // on the page. Stay well under what a shopper would notice; the config
+            // only toggles the tracker and a miss is cached for 5 minutes anyway.
+            $clientDetached = FullmetrixWebhookSender::isClientDetached();
+            $connectTimeoutMs = $clientDetached ? 1000 : 200;
+            $totalTimeoutMs = $clientDetached ? 2000 : 500;
 
             $apiBase = self::getConfig('FULLMETRIX_API_BASE');
             if (empty($apiBase)) {
@@ -573,7 +576,7 @@ class FullmetrixConnector extends Module
                 return;
             }
 
-            $clientDetached = function_exists('fastcgi_finish_request');
+            $clientDetached = FullmetrixWebhookSender::isClientDetached();
             $connectTimeoutMs = $clientDetached ? 1500 : 200;
             $totalTimeoutMs = $clientDetached ? 3000 : 500;
 

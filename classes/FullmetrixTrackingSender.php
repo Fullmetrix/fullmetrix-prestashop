@@ -113,7 +113,7 @@ class FullmetrixTrackingSender
 
             $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
 
-            $clientDetached = function_exists('fastcgi_finish_request');
+            $clientDetached = FullmetrixWebhookSender::isClientDetached();
             $connectTimeoutMs = $clientDetached ? 2000 : 300;
             $totalTimeoutMs = $clientDetached ? 3000 : 800;
 

@@ -4,6 +4,24 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.5.7
+
+### Fixed
+
+- Removes up to 2 seconds of page latency for the shopper when the Fullmetrix API
+  is slow. `getCachedConfig()` runs inside `hookDisplayHeader`, so the visitor is
+  still waiting on the page, but it picked its cURL timeouts from
+  `function_exists('fastcgi_finish_request')` — which only says PHP-FPM is
+  available, never that the response has actually been released. It therefore used
+  the long, post-detachment budget (1 s connect / 2 s total) on the rendering path.
+  Every timeout choice now asks `FullmetrixWebhookSender::isClientDetached()`, the
+  real state, and the rendering path is capped at 200 ms / 500 ms.
+
+  Measured on a live PrestaShop 8.2.8 with the API forced to answer in 5 s, one
+  call per page in both runs: **2.13 s before, 0.64 s after**. A shop whose page
+  renders in 0.25 s was serving 2.1 s pages to one visitor every 5 minutes
+  whenever our API was degraded.
+
 ## 1.5.6
 
 ### Fixed
