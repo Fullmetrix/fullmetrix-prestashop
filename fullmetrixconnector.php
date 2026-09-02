@@ -20,8 +20,11 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    public const FULLMETRIX_VERSION = '1.5.5';
+    public const FULLMETRIX_VERSION = '1.5.6';
     public const FULLMETRIX_CHANNEL = 'community';
+
+    /** Lifetime of a signed cart-recovery link, in seconds (30 days). */
+    public const CART_LINK_TTL = 2592000;
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
     private static $configCache = [];
@@ -83,7 +86,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.5';
+        $this->version = '1.5.6';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -196,6 +199,13 @@ class FullmetrixConnector extends Module
                 return;
             }
 
+            // Signed links carry no nonce, so an archived or forwarded URL would
+            // replay forever. Links issued from 1.5.6 onwards expire; older ones
+            // have no timestamp and stay accepted so in-flight emails keep working.
+            if (!empty($data['ts']) && (time() - (int) $data['ts']) > self::CART_LINK_TTL) {
+                return;
+            }
+
             $context = $this->context;
             if (!$context->language || !$context->currency || !$context->link) {
                 return;
@@ -220,17 +230,13 @@ class FullmetrixConnector extends Module
                 }
             }
 
+            // A recovery link must never destroy what the shopper put in the cart
+            // themselves. Lines already present win; only missing ones are added.
+            $existingKeys = [];
             $existingProducts = $cart->getProducts();
             if (is_array($existingProducts)) {
                 foreach ($existingProducts as $product) {
-                    try {
-                        $cart->deleteProduct(
-                            (int) $product['id_product'],
-                            (int) $product['id_product_attribute']
-                        );
-                    } catch (Throwable $e) {
-                        // Continue clearing other items
-                    }
+                    $existingKeys[(int) $product['id_product'] . '_' . (int) $product['id_product_attribute']] = true;
                 }
             }
 
@@ -239,6 +245,10 @@ class FullmetrixConnector extends Module
                     $productId = isset($item['id']) ? (int) $item['id'] : 0;
                     $variationId = isset($item['v']) ? (int) $item['v'] : 0;
                     $quantity = isset($item['q']) ? max(1, (int) $item['q']) : 1;
+
+                    if (isset($existingKeys[$productId . '_' . $variationId])) {
+                        continue;
+                    }
 
                     if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
                         $cart->updateQty($quantity, $productId, $variationId);
@@ -1052,7 +1062,7 @@ class FullmetrixConnector extends Module
                 return null;
             }
 
-            $payloadJson = json_encode(['items' => $itemsData, 'c' => $coupons]);
+            $payloadJson = json_encode(['items' => $itemsData, 'c' => $coupons, 'ts' => time()]);
             if ($payloadJson === false) {
                 return null;
             }

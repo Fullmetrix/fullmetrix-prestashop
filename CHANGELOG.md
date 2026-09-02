@@ -4,6 +4,22 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.5.6
+
+### Fixed
+
+- A signed cart-recovery link (`fm_cart`) no longer empties the cart the shopper
+  is currently building. `maybeRebuildCart()` used to delete every line of the
+  current cart before restoring the payload, so a customer who filled a cart and
+  then clicked an older abandoned-cart email lost what they had just added. Lines
+  already in the cart now win, and only the missing ones are added. Measured on a
+  live PrestaShop 8.2.8: before, a cart holding one product came back holding only
+  the link's product; after, it holds both.
+- Cart-recovery links now carry a timestamp and expire after 30 days. The payload
+  is signed but has no nonce, so an archived or forwarded URL used to replay
+  forever. Links issued before this version carry no timestamp and keep working,
+  so emails already sent are unaffected.
+
 ## 1.5.5
 
 ### Fixed

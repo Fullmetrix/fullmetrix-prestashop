@@ -1,6 +1,6 @@
 {
-  "version": "1.5.5",
+  "version": "1.5.6",
   "minimumRequired": "1.7.4.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Corrige une boucle de redirection a la connexion client. Mise a jour recommandee sur toutes les boutiques PrestaShop 1.7.6 et superieur."
+  "changelog": "Le lien de panier abandonne ne supprime plus le panier en cours du client. Correctif de connexion client de la 1.5.5 inclus."
 }
