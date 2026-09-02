@@ -82,6 +82,29 @@ class FullmetrixWebhookSender
     }
 
     /**
+     * Persist the PrestaShop cookie before the response is detached.
+     *
+     * Cookie::write() bails out on headers_sent(), and PrestaShop only writes
+     * the cookie from Cookie::__destruct(), which PHP runs *after* the shutdown
+     * functions we register. On login, Context::updateCustomer() writes the
+     * cookie and only then adds session_id/session_token via registerSession(),
+     * so those two keys are still pending at shutdown. Detaching the response
+     * first drops them, isSessionAlive() then fails on the next request and the
+     * customer is bounced back to the login page, forever.
+     */
+    private static function flushPendingCookie()
+    {
+        try {
+            $context = Context::getContext();
+            if ($context && isset($context->cookie) && $context->cookie instanceof Cookie) {
+                $context->cookie->write();
+            }
+        } catch (Throwable $e) {
+            // Never let cookie persistence break the response
+        }
+    }
+
+    /**
      * Release the client response if we're under FPM. Idempotent across senders.
      */
     public static function finishResponse()
@@ -90,6 +113,8 @@ class FullmetrixWebhookSender
             return;
         }
         self::$responseFinished = true;
+
+        self::flushPendingCookie();
 
         if (function_exists('fastcgi_finish_request')) {
             @fastcgi_finish_request();

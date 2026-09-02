@@ -4,6 +4,23 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.5.5
+
+### Fixed
+
+- Fixes an infinite redirect loop on customer login. The shutdown handlers that
+  send tracking events, webhooks and checkout consents call
+  `fastcgi_finish_request()` to release the client before any HTTP call. PHP runs
+  shutdown functions before object destructors, and PrestaShop only persists its
+  cookie from `Cookie::__destruct()`, where `write()` is a no-op once
+  `headers_sent()` is true. On login, `Context::updateCustomer()` writes the
+  cookie and *then* adds `session_id` / `session_token` through
+  `registerSession()`, so those keys were still pending when the response was
+  detached and never reached the browser. `Cookie::isSessionAlive()` then failed
+  on the next request and the customer was sent back to the login page. The
+  response is now detached only after the pending cookie has been written.
+  Affects PrestaShop 8.2 and later, where customer sessions are token-backed.
+
 ## 1.5.4
 
 ### Added

@@ -1,6 +1,6 @@
 {
-  "version": "1.5.4",
+  "version": "1.5.5",
   "minimumRequired": "1.7.4.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Adds displayed tax-inclusive prices and real-time variation price updates for accurate price history."
+  "changelog": "Corrige une boucle de redirection a la connexion client sur PrestaShop 8.2 et superieur."
 }

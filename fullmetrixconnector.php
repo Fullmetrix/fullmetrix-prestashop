@@ -20,7 +20,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    public const FULLMETRIX_VERSION = '1.5.4';
+    public const FULLMETRIX_VERSION = '1.5.5';
     public const FULLMETRIX_CHANNEL = 'community';
 
     /** @var array<string, mixed> Per-request Configuration cache (avoids hot-path DB reads) */
@@ -83,7 +83,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.4';
+        $this->version = '1.5.5';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
