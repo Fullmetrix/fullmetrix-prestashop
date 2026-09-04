@@ -28,6 +28,10 @@ class FullmetrixStreamExporter
 
     const META_SHORT_VALUE_LENGTH = 512;
 
+    // The reporting engine cannot address a key longer than this, so a longer
+    // one would be paid for in every payload and never usable.
+    const META_KEY_MAX_LENGTH = 80;
+
     private static $sensitiveColumns = [
         'passwd', 'secure_key', 'last_passwd_gen',
         'reset_password_token', 'reset_password_validity',
@@ -59,6 +63,32 @@ class FullmetrixStreamExporter
         // Constant on a customer address, and repeated on every order payload.
         'date_add', 'date_upd', 'active',
         'id_manufacturer', 'id_supplier', 'id_warehouse',
+    ];
+
+    private static $carrierMappedColumns = [
+        'id_order', 'id_order_carrier', 'id_carrier',
+        'tracking_number', 'shipping_cost_tax_incl', 'carrier_name',
+    ];
+
+    private static $paymentMappedColumns = [
+        'order_reference', 'payment_method', 'amount', 'transaction_id',
+    ];
+
+    private static $refundMappedColumns = [
+        'id_order_slip', 'id_order', 'id_customer',
+        'total_products_tax_incl', 'total_shipping_tax_incl',
+        'amount', 'shipping_cost_amount', 'date_add', 'date_upd',
+        'id_shop', 'id_shop_group',
+    ];
+
+    private static $lineItemMappedColumns = [
+        'id_order', 'id_order_detail', 'product_name',
+        'product_quantity', 'product_reference',
+        'product_id', 'product_attribute_id',
+        'unit_price_tax_excl', 'unit_price_tax_incl',
+        'total_price_tax_excl', 'total_price_tax_incl',
+        'reduction_percent', 'reduction_amount_tax_incl',
+        'tax_name', 'tax_rate', 'product_ean13', 'product_upc',
     ];
 
     private static $productMappedColumns = [
@@ -338,7 +368,7 @@ class FullmetrixStreamExporter
                 if (preg_match('//u', $text) !== 1) {
                     continue;
                 }
-                $prefixedKey = $prefix . $key;
+                $prefixedKey = $this->truncateUtf8($prefix . $key, self::META_KEY_MAX_LENGTH);
                 if (strlen($text) <= self::META_SHORT_VALUE_LENGTH) {
                     $short[] = ['key' => $prefixedKey, 'value' => $text];
                     continue;
@@ -612,18 +642,21 @@ class FullmetrixStreamExporter
 
     private function batchLoadOrderLineItems($orderIdsList)
     {
-        $sql = 'SELECT od.id_order, od.id_order_detail, od.product_name,
-                   od.product_quantity, od.product_reference,
-                   od.product_id, od.product_attribute_id,
-                   od.unit_price_tax_excl, od.unit_price_tax_incl,
-                   od.total_price_tax_excl, od.total_price_tax_incl,
-                   od.reduction_percent, od.reduction_amount_tax_incl,
-                   od.tax_name, od.tax_rate,
-                   od.product_ean13, od.product_upc
+        $sql = 'SELECT od.*
             FROM ' . $this->prefix . 'order_detail od
             WHERE od.id_order IN (' . $orderIdsList . ')';
 
         $rows = $this->safeQuery($sql, 'order_line_items');
+        $customizationIds = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $cuId = (int) ($row['id_customization'] ?? 0);
+                if ($cuId > 0) {
+                    $customizationIds[$cuId] = true;
+                }
+            }
+        }
+        $customizationMap = $this->batchLoadCustomizations(array_keys($customizationIds));
         $map = [];
 
         if (is_array($rows)) {
@@ -657,7 +690,46 @@ class FullmetrixStreamExporter
                     'upc' => (string) ($row['product_upc'] ?? ''),
                     'reduction_percent' => (string) ($row['reduction_percent'] ?? '0'),
                     'reduction_amount' => (string) ($row['reduction_amount_tax_incl'] ?? '0'),
+                    'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                        [[$row, self::$lineItemMappedColumns, '']],
+                        $customizationMap[(int) $row['id_customization']] ?? []
+                    )),
                 ];
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Text and file fields filled in by the customer on the product page. They
+     * live in their own tables, keyed by the label the merchant configured.
+     */
+    private function batchLoadCustomizations(array $customizationIds)
+    {
+        if (empty($customizationIds)) {
+            return [];
+        }
+
+        $idsList = implode(',', array_map('intval', $customizationIds));
+        $sql = 'SELECT cd.id_customization, cd.type, cd.index, cd.value, cfl.name AS field_name
+            FROM ' . $this->prefix . 'customized_data cd
+            LEFT JOIN ' . $this->prefix . 'customization_field_lang cfl
+                ON (cfl.id_customization_field = cd.index AND cfl.id_lang = ' . $this->idLang . ')
+            WHERE cd.id_customization IN (' . $idsList . ')';
+
+        $rows = $this->safeQuery($sql, 'order_customizations');
+        $map = [];
+
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $id = (int) $row['id_customization'];
+                $label = trim((string) ($row['field_name'] ?? ''));
+                if ($label === '') {
+                    $label = 'field_' . (int) $row['index'];
+                }
+                $key = ((int) $row['type'] === 0 ? 'customization_file_' : 'customization_') . $label;
+                $map[$id][] = [[$key => $row['value']], [], ''];
             }
         }
 
@@ -666,9 +738,7 @@ class FullmetrixStreamExporter
 
     private function batchLoadOrderCarriers($orderIdsList)
     {
-        $sql = 'SELECT oc.id_order, oc.id_order_carrier, oc.id_carrier,
-                   oc.tracking_number, oc.shipping_cost_tax_incl,
-                   ca.name AS carrier_name
+        $sql = 'SELECT oc.*, ca.name AS carrier_name
             FROM ' . $this->prefix . 'order_carrier oc
             LEFT JOIN ' . $this->prefix . 'carrier ca ON oc.id_carrier = ca.id_carrier
             WHERE oc.id_order IN (' . $orderIdsList . ')';
@@ -684,6 +754,7 @@ class FullmetrixStreamExporter
                     'method_title' => (string) ($row['carrier_name'] ?? ''),
                     'total' => (string) round((float) $row['shipping_cost_tax_incl'], 2),
                     'tracking_number' => (string) ($row['tracking_number'] ?? ''),
+                    'meta_data' => $this->extraColumnsMeta($row, self::$carrierMappedColumns),
                 ];
             }
         }
@@ -747,8 +818,7 @@ class FullmetrixStreamExporter
 
         $refList = '\'' . implode('\',\'', $references) . '\'';
 
-        $sql = 'SELECT op.order_reference, op.payment_method, op.amount,
-                   op.transaction_id, op.card_brand, op.date_add
+        $sql = 'SELECT op.*
             FROM ' . $this->prefix . 'order_payment op
             WHERE op.order_reference IN (' . $refList . ')';
 
@@ -762,6 +832,7 @@ class FullmetrixStreamExporter
                     'method' => (string) ($row['payment_method'] ?? ''),
                     'amount' => (string) round((float) $row['amount'], 2),
                     'transaction_id' => (string) ($row['transaction_id'] ?? ''),
+                    'meta_data' => $this->extraColumnsMeta($row, self::$paymentMappedColumns),
                 ];
             }
         }
@@ -780,10 +851,7 @@ class FullmetrixStreamExporter
         }
 
         while (true) {
-            $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
-                       os.total_products_tax_incl, os.total_shipping_tax_incl,
-                       os.amount, os.shipping_cost_amount,
-                       os.date_add, os.date_upd,
+            $sql = 'SELECT os.*,
                        o.id_shop, o.id_shop_group
                 FROM ' . $this->prefix . 'order_slip os
                 LEFT JOIN ' . $this->prefix . 'orders o ON (os.id_order = o.id_order)
@@ -826,6 +894,7 @@ class FullmetrixStreamExporter
                         'date_created' => $this->toIso($row['date_add']),
                         'refunded_by' => null,
                         'line_items' => $detailMap[$sid] ?? [],
+                        'meta_data' => $this->extraColumnsMeta($row, self::$refundMappedColumns),
                     ],
                 ]);
 
@@ -849,8 +918,7 @@ class FullmetrixStreamExporter
 
     private function batchLoadSlipDetails($slipIdsList)
     {
-        $sql = 'SELECT osd.id_order_slip, osd.id_order_detail,
-                   osd.product_quantity, osd.amount_tax_incl
+        $sql = 'SELECT osd.*
             FROM ' . $this->prefix . 'order_slip_detail osd
             WHERE osd.id_order_slip IN (' . $slipIdsList . ')';
 
@@ -864,6 +932,9 @@ class FullmetrixStreamExporter
                     'id' => (int) $row['id_order_detail'],
                     'quantity' => (int) $row['product_quantity'],
                     'amount' => (string) round((float) $row['amount_tax_incl'], 2),
+                    'meta_data' => $this->extraColumnsMeta($row, [
+                        'id_order_slip', 'id_order_detail', 'product_quantity', 'amount_tax_incl',
+                    ]),
                 ];
             }
         }
@@ -2388,10 +2459,7 @@ class FullmetrixStreamExporter
 
     private function formatSingleRefund($slipId)
     {
-        $sql = 'SELECT os.id_order_slip, os.id_order, os.id_customer,
-                   os.total_products_tax_incl, os.total_shipping_tax_incl,
-                   os.amount, os.shipping_cost_amount,
-                   os.date_add,
+        $sql = 'SELECT os.*,
                    o.id_shop, o.id_shop_group
             FROM ' . $this->prefix . 'order_slip os
             LEFT JOIN ' . $this->prefix . 'orders o ON (os.id_order = o.id_order)
