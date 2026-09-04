@@ -464,9 +464,18 @@ class FullmetrixStreamExporter
         $tables = [];
         try {
             $denylist = '\'' . implode('\',\'', array_map('pSQL', self::$relatedTableDenylist)) . '\'';
+            // La cle primaire sert a ne ramener qu'une ligne par entite, en SQL:
+            // une table portant des milliers de lignes par entite serait sinon
+            // chargee entiere en memoire.
             $rows = $this->db->executeS(
-                'SELECT c.TABLE_NAME AS table_name, COUNT(*) AS column_count
+                'SELECT c.TABLE_NAME AS table_name,
+                        MIN(k.COLUMN_NAME) AS pk_column,
+                        COUNT(*) AS column_count
                  FROM information_schema.COLUMNS c
+                 LEFT JOIN information_schema.KEY_COLUMN_USAGE k
+                        ON (k.TABLE_SCHEMA = c.TABLE_SCHEMA
+                        AND k.TABLE_NAME = c.TABLE_NAME
+                        AND k.CONSTRAINT_NAME = \'PRIMARY\')
                  WHERE c.TABLE_SCHEMA = DATABASE()
                    AND c.TABLE_NAME LIKE \'' . pSQL($this->prefix) . '%\'
                    AND EXISTS (
@@ -483,7 +492,7 @@ class FullmetrixStreamExporter
             );
             if (is_array($rows)) {
                 foreach ($rows as $row) {
-                    $tables[] = (string) $row['table_name'];
+                    $tables[(string) $row['table_name']] = (string) ($row['pk_column'] ?? '');
                 }
             }
             // Une troncature silencieuse laisserait croire a une couverture
@@ -521,10 +530,19 @@ class FullmetrixStreamExporter
         }
 
         $groups = [];
-        foreach ($this->detectRelatedTables($fkColumn) as $table) {
+        foreach ($this->detectRelatedTables($fkColumn) as $table => $pkColumn) {
             $shortName = substr($table, strlen($this->prefix));
+            $where = bqSQL($fkColumn) . ' IN (' . $idsList . ')';
+            if ($pkColumn !== '' && $pkColumn !== $fkColumn) {
+                // Une seule ligne par entite, la derniere, decidee par le moteur.
+                $where = '(' . bqSQL($fkColumn) . ', ' . bqSQL($pkColumn) . ') IN ('
+                    . 'SELECT ' . bqSQL($fkColumn) . ', MAX(' . bqSQL($pkColumn) . ')'
+                    . ' FROM `' . bqSQL($table) . '`'
+                    . ' WHERE ' . bqSQL($fkColumn) . ' IN (' . $idsList . ')'
+                    . ' GROUP BY ' . bqSQL($fkColumn) . ')';
+            }
             $rows = $this->safeQuery(
-                'SELECT * FROM `' . bqSQL($table) . '` WHERE ' . bqSQL($fkColumn) . ' IN (' . $idsList . ')',
+                'SELECT * FROM `' . bqSQL($table) . '` WHERE ' . $where,
                 'related_' . $shortName
             );
             if (!is_array($rows)) {
