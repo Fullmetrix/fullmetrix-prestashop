@@ -332,12 +332,18 @@ class FullmetrixStreamExporter
                 if ($text === '0000-00-00' || $text === '0000-00-00 00:00:00') {
                     continue;
                 }
+                // A module column can hold binary or badly encoded bytes. Such a
+                // value would make json_encode fail and take the whole entity
+                // down with it.
+                if (preg_match('//u', $text) !== 1) {
+                    continue;
+                }
                 $prefixedKey = $prefix . $key;
                 if (strlen($text) <= self::META_SHORT_VALUE_LENGTH) {
                     $short[] = ['key' => $prefixedKey, 'value' => $text];
                     continue;
                 }
-                $long[] = ['key' => $prefixedKey, 'value' => substr($text, 0, self::META_VALUE_MAX_LENGTH)];
+                $long[] = ['key' => $prefixedKey, 'value' => $this->truncateUtf8($text, self::META_VALUE_MAX_LENGTH)];
             }
         }
 
@@ -352,14 +358,38 @@ class FullmetrixStreamExporter
             if ($budget <= 0) {
                 break;
             }
-            $meta[] = [
-                'key' => $item['key'],
-                'value' => strlen($item['value']) > $budget ? substr($item['value'], 0, $budget) : $item['value'],
-            ];
+            $value = strlen($item['value']) > $budget
+                ? $this->truncateUtf8($item['value'], $budget)
+                : $item['value'];
+            $meta[] = ['key' => $item['key'], 'value' => $value];
             $budget -= strlen($item['value']);
         }
 
         return $meta;
+    }
+
+    /**
+     * Cut on a character boundary. A byte-level cut splits a multibyte
+     * character in two, which is enough to make json_encode reject the payload.
+     */
+    private function truncateUtf8($text, $maxBytes)
+    {
+        if ($maxBytes <= 0) {
+            return '';
+        }
+        if (strlen($text) <= $maxBytes) {
+            return $text;
+        }
+        if (function_exists('mb_strcut')) {
+            return mb_strcut($text, 0, $maxBytes, 'UTF-8');
+        }
+
+        $cut = substr($text, 0, $maxBytes);
+        while ($cut !== '' && preg_match('//u', $cut) !== 1) {
+            $cut = substr($cut, 0, -1);
+        }
+
+        return $cut;
     }
 
     private function mergeMeta(array $metaData, array $extras)
@@ -1816,7 +1846,23 @@ class FullmetrixStreamExporter
 
     private function sendLine($data)
     {
-        echo json_encode($data, JSON_UNESCAPED_UNICODE) . "\n";
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+
+        // Any badly encoded byte coming from the shop database would otherwise
+        // turn the whole line into an empty one, silently losing the entity.
+        if ($json === false && defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        }
+        if ($json === false) {
+            if (!class_exists('FullmetrixLogger')) {
+                require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
+            }
+            FullmetrixLogger::log('send_line_encode_failed', json_last_error_msg());
+
+            return;
+        }
+
+        echo $json . "\n";
         flush();
     }
 
