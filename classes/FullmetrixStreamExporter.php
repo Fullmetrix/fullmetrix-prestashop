@@ -496,6 +496,10 @@ class FullmetrixStreamExporter
             $rows = $this->db->executeS(
                 'SELECT c.TABLE_NAME AS table_name,
                         MIN(k.COLUMN_NAME) AS pk_column,
+                        GROUP_CONCAT(
+                            CASE WHEN c.DATA_TYPE IN (\'blob\', \'mediumblob\', \'longblob\', \'tinyblob\', \'binary\', \'varbinary\')
+                                 THEN NULL ELSE c.COLUMN_NAME END
+                        ) AS safe_columns,
                         COUNT(*) AS column_count
                  FROM information_schema.COLUMNS c
                  LEFT JOIN information_schema.KEY_COLUMN_USAGE k
@@ -518,7 +522,10 @@ class FullmetrixStreamExporter
             );
             if (is_array($rows)) {
                 foreach ($rows as $row) {
-                    $tables[(string) $row['table_name']] = (string) ($row['pk_column'] ?? '');
+                    $tables[(string) $row['table_name']] = [
+                        'pk' => (string) ($row['pk_column'] ?? ''),
+                        'columns' => array_values(array_filter(explode(',', (string) ($row['safe_columns'] ?? '')))),
+                    ];
                 }
             }
             // Une troncature silencieuse laisserait croire a une couverture
@@ -556,7 +563,15 @@ class FullmetrixStreamExporter
         }
 
         $groups = [];
-        foreach ($this->detectRelatedTables($fkColumn) as $table => $pkColumn) {
+        foreach ($this->detectRelatedTables($fkColumn) as $table => $meta) {
+            $pkColumn = $meta['pk'];
+            if (empty($meta['columns'])) {
+                continue;
+            }
+            // Colonnes listees explicitement: une colonne binaire, un PDF de
+            // facture stocke par un module par exemple, serait lue en memoire
+            // pour chaque ligne avant d'etre ecartee.
+            $select = '`' . implode('`, `', array_map('bqSQL', $meta['columns'])) . '`';
             $shortName = substr($table, strlen($this->prefix));
             $where = bqSQL($fkColumn) . ' IN (' . $idsList . ')';
             if ($pkColumn !== '' && $pkColumn !== $fkColumn) {
@@ -568,7 +583,7 @@ class FullmetrixStreamExporter
                     . ' GROUP BY ' . bqSQL($fkColumn) . ')';
             }
             $rows = $this->safeQuery(
-                'SELECT * FROM `' . bqSQL($table) . '` WHERE ' . $where,
+                'SELECT ' . $select . ' FROM `' . bqSQL($table) . '` WHERE ' . $where,
                 'related_' . $shortName
             );
             if (!is_array($rows)) {
