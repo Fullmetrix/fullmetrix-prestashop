@@ -20,6 +20,7 @@ class FullmetrixStreamExporter
     private $memoryLimitBytes;
     private $link;
     private $cartRuleColumnsCache;
+    private $relatedTablesCache = [];
     private $shopContextCache = [];
 
     const META_VALUE_MAX_LENGTH = 20000;
@@ -422,6 +423,110 @@ class FullmetrixStreamExporter
         return $cut;
     }
 
+    // A shop can carry hundreds of tables. Only this many are followed per
+    // entity, so a badly designed module cannot turn one sync into hundreds of
+    // queries per batch.
+    const MAX_RELATED_TABLES = 12;
+
+    /**
+     * Tables already exported on their own, plus the ones whose content would
+     * be meaningless or unbounded as entity meta.
+     */
+    private static $relatedTableDenylist = [
+        'orders', 'order_detail', 'order_detail_tax', 'order_slip', 'order_slip_detail',
+        'order_slip_detail_tax', 'order_carrier', 'order_payment', 'order_cart_rule',
+        'customer', 'address', 'product', 'product_lang', 'product_shop',
+        'product_attribute', 'product_attribute_combination', 'product_attribute_shop',
+        'product_attribute_image', 'product_lang_backup', 'category_product',
+        'cart_product', 'customized_data', 'customization', 'customization_field',
+        'customization_field_lang', 'stock_mvt', 'stock_available', 'specific_price',
+        'specific_price_rule', 'log', 'connections', 'connections_page',
+        'connections_source', 'guest', 'page_viewed', 'pagenotfound',
+        'search_index', 'search_word', 'statssearch', 'layered_product_attribute',
+        'layered_filter', 'layered_price_index', 'image', 'image_shop', 'image_lang',
+    ];
+
+    /**
+     * Any table carrying the entity foreign key, discovered at runtime. A module
+     * that adds its own table is picked up without touching this connector.
+     */
+    private function detectRelatedTables($fkColumn)
+    {
+        if (isset($this->relatedTablesCache[$fkColumn])) {
+            return $this->relatedTablesCache[$fkColumn];
+        }
+
+        $tables = [];
+        try {
+            $denylist = '\'' . implode('\',\'', array_map('pSQL', self::$relatedTableDenylist)) . '\'';
+            $rows = $this->db->executeS(
+                'SELECT c.TABLE_NAME AS table_name, COUNT(*) AS column_count
+                 FROM information_schema.COLUMNS c
+                 WHERE c.TABLE_SCHEMA = DATABASE()
+                   AND c.TABLE_NAME LIKE \'' . pSQL($this->prefix) . '%\'
+                   AND EXISTS (
+                       SELECT 1 FROM information_schema.COLUMNS f
+                       WHERE f.TABLE_SCHEMA = c.TABLE_SCHEMA
+                         AND f.TABLE_NAME = c.TABLE_NAME
+                         AND f.COLUMN_NAME = \'' . pSQL($fkColumn) . '\'
+                   )
+                   AND SUBSTRING(c.TABLE_NAME, ' . (strlen($this->prefix) + 1) . ') NOT IN (' . $denylist . ')
+                 GROUP BY c.TABLE_NAME
+                 HAVING column_count > 1
+                 ORDER BY c.TABLE_NAME
+                 LIMIT ' . (int) self::MAX_RELATED_TABLES
+            );
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
+                    $tables[] = (string) $row['table_name'];
+                }
+            }
+        } catch (Throwable $e) {
+            // An information_schema restricted by hosting must not break the sync.
+            $tables = [];
+        }
+
+        $this->relatedTablesCache[$fkColumn] = $tables;
+
+        return $tables;
+    }
+
+    /**
+     * One row per table and per entity, the most recent one, keyed by the table
+     * short name. Emitting every row would make the payload grow with the
+     * shop's history and the key names unstable.
+     *
+     * @return array entity id => list of meta groups
+     */
+    private function batchLoadRelatedTableMeta($fkColumn, $idsList)
+    {
+        if ($idsList === '') {
+            return [];
+        }
+
+        $groups = [];
+        foreach ($this->detectRelatedTables($fkColumn) as $table) {
+            $shortName = substr($table, strlen($this->prefix));
+            $rows = $this->safeQuery(
+                'SELECT * FROM `' . bqSQL($table) . '` WHERE ' . bqSQL($fkColumn) . ' IN (' . $idsList . ')',
+                'related_' . $shortName
+            );
+            if (!is_array($rows)) {
+                continue;
+            }
+            foreach ($rows as $row) {
+                $id = (int) $row[$fkColumn];
+                $groups[$id][$shortName] = [$row, [$fkColumn], $shortName . '_'];
+            }
+        }
+
+        foreach ($groups as $id => $byTable) {
+            $groups[$id] = array_values($byTable);
+        }
+
+        return $groups;
+    }
+
     private function mergeMeta(array $metaData, array $extras)
     {
         $seen = [];
@@ -511,6 +616,9 @@ class FullmetrixStreamExporter
             // Batch: customer groups
             $customerGroupsMap = $this->batchLoadCustomerGroups(implode(',', $customerIds));
 
+            // Tables ajoutees par des modules, decouvertes a l'execution
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_order', $orderIdsList);
+
             foreach ($rows as $row) {
                 $oid = (int) $row['id_order'];
                 $totalTaxIncl = (float) $row['total_paid_tax_incl'];
@@ -561,11 +669,11 @@ class FullmetrixStreamExporter
                         'coupon_lines' => $couponMap[$oid] ?? [],
                         'tax_lines' => [],
                         'payments' => $paymentMap[$row['reference']] ?? [],
-                        'meta_data' => $this->extraColumnsMetaGroups([
+                        'meta_data' => $this->extraColumnsMetaGroups(array_merge([
                             [$row, self::$orderMappedColumns, ''],
                             [$billingAddr, self::$addressMappedColumns, 'billing_'],
                             [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
-                        ]),
+                        ], $relatedMap[$oid] ?? [])),
                     ],
                 ]);
 
@@ -986,6 +1094,7 @@ class FullmetrixStreamExporter
 
             // Batch: groups
             $groupsMap = $this->batchLoadCustomerGroups($customerIdsList);
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_customer', $customerIdsList);
 
             foreach ($rows as $row) {
                 $cid = (int) $row['id_customer'];
@@ -1027,11 +1136,11 @@ class FullmetrixStreamExporter
                     $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
                     $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
                 }
-                $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups([
+                $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups(array_merge([
                     [$row, self::$customerMappedColumns, ''],
                     [$primaryAddr, self::$addressMappedColumns, 'billing_'],
                     [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
-                ]));
+                ], $relatedMap[$cid] ?? [])));
 
                 $this->sendLine([
                     'type' => 'customer',
@@ -1174,6 +1283,7 @@ class FullmetrixStreamExporter
             $combosMap = $this->batchLoadCombinations($productIdsList);
             $suppliersMap = $this->batchLoadProductSuppliers($productIdsList);
             $featuresMap = $this->batchLoadProductFeatures($productIdsList);
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_product', $productIdsList);
             $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
@@ -1231,7 +1341,10 @@ class FullmetrixStreamExporter
                         'images' => $imageList,
                         'date_created' => $this->toIso($row['date_add']),
                         'date_modified' => $this->toIso($row['date_upd']),
-                        'meta_data' => $this->extraColumnsMeta($row, self::$productMappedColumns),
+                        'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                            [[$row, self::$productMappedColumns, '']],
+                            $relatedMap[$pid] ?? []
+                        )),
                     ],
                 ]);
                 ++$count;
