@@ -38,6 +38,18 @@ class FullmetrixStreamExporter
         'reset_password_token', 'reset_password_validity',
     ];
 
+    /**
+     * Motifs appliques aux colonnes des tables tierces, ou aucune liste de noms
+     * ne peut etre exhaustive. Bilingue: un module francais nomme ses colonnes
+     * jeton_api ou mot_de_passe, qui ne contiennent aucun motif anglais.
+     */
+    private static $sensitiveKeyPatterns = [
+        'password', 'passwd', 'secret', 'token', 'api_key', 'apikey',
+        'private_key', 'salt', 'nonce', 'credential',
+        'jeton', 'mot_de_passe', 'motdepasse', 'cle_api', 'cle_secrete',
+        'cle_privee', 'empreinte', 'signature',
+    ];
+
     private static $orderMappedColumns = [
         'id_order', 'reference', 'id_customer', 'id_currency',
         'id_shop', 'id_shop_group', 'id_address_delivery', 'id_address_invoice',
@@ -353,7 +365,9 @@ class FullmetrixStreamExporter
                 continue;
             }
             foreach ($row as $key => $value) {
-                if (in_array($key, $mappedColumns, true) || in_array($key, self::$sensitiveColumns, true)) {
+                if (in_array($key, $mappedColumns, true)
+                    || in_array($key, self::$sensitiveColumns, true)
+                    || $this->isSensitiveKey($key)) {
                     continue;
                 }
                 if ($value === null || $value === '' || !is_scalar($value)) {
@@ -403,6 +417,18 @@ class FullmetrixStreamExporter
      * Cut on a character boundary. A byte-level cut splits a multibyte
      * character in two, which is enough to make json_encode reject the payload.
      */
+    private function isSensitiveKey($key)
+    {
+        $lower = strtolower((string) $key);
+        foreach (self::$sensitiveKeyPatterns as $pattern) {
+            if (strpos($lower, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function truncateUtf8($text, $maxBytes)
     {
         if ($maxBytes <= 0) {
