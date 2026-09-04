@@ -22,7 +22,11 @@ class FullmetrixStreamExporter
     private $cartRuleColumnsCache;
     private $shopContextCache = [];
 
-    const META_VALUE_MAX_LENGTH = 1000;
+    const META_VALUE_MAX_LENGTH = 20000;
+
+    const META_TOTAL_MAX_LENGTH = 65536;
+
+    const META_SHORT_VALUE_LENGTH = 512;
 
     private static $sensitiveColumns = [
         'passwd', 'secure_key', 'last_passwd_gen',
@@ -294,26 +298,62 @@ class FullmetrixStreamExporter
      */
     private function extraColumnsMeta($row, array $mappedColumns)
     {
-        if (!is_array($row)) {
-            return [];
+        return $this->extraColumnsMetaGroups([[$row, $mappedColumns, '']]);
+    }
+
+    /**
+     * Same as extraColumnsMeta over several rows at once, each with its own key
+     * prefix. Keys stay flat: the reporting engine only addresses key/value
+     * arrays sitting at the root of the payload, so a nested meta_data would be
+     * catalogued and never resolve.
+     *
+     * @param array $groups list of [row, mappedColumns, keyPrefix]
+     */
+    private function extraColumnsMetaGroups(array $groups)
+    {
+        $short = [];
+        $long = [];
+        foreach ($groups as $group) {
+            list($row, $mappedColumns, $prefix) = $group;
+            if (!is_array($row)) {
+                continue;
+            }
+            foreach ($row as $key => $value) {
+                if (in_array($key, $mappedColumns, true) || in_array($key, self::$sensitiveColumns, true)) {
+                    continue;
+                }
+                if ($value === null || $value === '' || !is_scalar($value)) {
+                    continue;
+                }
+                $text = (string) $value;
+                if ($text === '0000-00-00' || $text === '0000-00-00 00:00:00') {
+                    continue;
+                }
+                $prefixedKey = $prefix . $key;
+                if (strlen($text) <= self::META_SHORT_VALUE_LENGTH) {
+                    $short[] = ['key' => $prefixedKey, 'value' => $text];
+                    continue;
+                }
+                $long[] = ['key' => $prefixedKey, 'value' => substr($text, 0, self::META_VALUE_MAX_LENGTH)];
+            }
         }
 
-        $meta = [];
-        foreach ($row as $key => $value) {
-            if (in_array($key, $mappedColumns, true) || in_array($key, self::$sensitiveColumns, true)) {
-                continue;
+        // Short values are emitted first so a single bulky text column can never
+        // push an identifier-sized field out of the payload.
+        $meta = $short;
+        $budget = self::META_TOTAL_MAX_LENGTH;
+        foreach ($short as $item) {
+            $budget -= strlen($item['value']);
+        }
+        foreach ($long as $item) {
+            if ($budget <= 0) {
+                break;
             }
-            if ($value === null || $value === '' || !is_scalar($value)) {
-                continue;
-            }
-            $text = (string) $value;
-            if ($text === '0000-00-00' || $text === '0000-00-00 00:00:00') {
-                continue;
-            }
-            if (strlen($text) > self::META_VALUE_MAX_LENGTH) {
-                continue;
-            }
-            $meta[] = ['key' => $key, 'value' => $text];
+            $meta[] = [
+                'key' => $item['key'],
+                'value' => strlen($item['value']) > $budget ? substr($item['value'], 0, $budget) : $item['value'],
+            ];
+            $budget -= strlen($item['value']);
         }
 
         return $meta;
@@ -458,7 +498,11 @@ class FullmetrixStreamExporter
                         'coupon_lines' => $couponMap[$oid] ?? [],
                         'tax_lines' => [],
                         'payments' => $paymentMap[$row['reference']] ?? [],
-                        'meta_data' => $this->extraColumnsMeta($row, self::$orderMappedColumns),
+                        'meta_data' => $this->extraColumnsMetaGroups([
+                            [$row, self::$orderMappedColumns, ''],
+                            [$billingAddr, self::$addressMappedColumns, 'billing_'],
+                            [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
+                        ]),
                     ],
                 ]);
 
@@ -514,7 +558,7 @@ class FullmetrixStreamExporter
                 'first_name' => '', 'last_name' => '', 'company' => '',
                 'address_1' => '', 'address_2' => '', 'city' => '',
                 'state' => '', 'postcode' => '', 'country' => '',
-                'email' => '', 'phone' => '', 'meta_data' => [],
+                'email' => '', 'phone' => '',
             ];
         }
 
@@ -530,7 +574,6 @@ class FullmetrixStreamExporter
             'country' => (string) ($addr['country'] ?? ''),
             'email' => '',
             'phone' => (string) ($addr['phone'] ?: ($addr['phone_mobile'] ?? '')),
-            'meta_data' => $this->extraColumnsMeta($addr, self::$addressMappedColumns),
         ];
     }
 
@@ -880,7 +923,11 @@ class FullmetrixStreamExporter
                     $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
                     $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
                 }
-                $metaData = $this->mergeMeta($metaData, $this->extraColumnsMeta($row, self::$customerMappedColumns));
+                $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups([
+                    [$row, self::$customerMappedColumns, ''],
+                    [$primaryAddr, self::$addressMappedColumns, 'billing_'],
+                    [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
+                ]));
 
                 $this->sendLine([
                     'type' => 'customer',
@@ -1951,7 +1998,11 @@ class FullmetrixStreamExporter
             'coupon_lines' => $couponMap[$orderId] ?? [],
             'tax_lines' => [],
             'payments' => $paymentMap[$row['reference']] ?? [],
-            'meta_data' => $this->extraColumnsMeta($row, self::$orderMappedColumns),
+            'meta_data' => $this->extraColumnsMetaGroups([
+                [$row, self::$orderMappedColumns, ''],
+                [$addressMap[(int) $row['id_address_invoice']] ?? null, self::$addressMappedColumns, 'billing_'],
+                [$addressMap[(int) $row['id_address_delivery']] ?? null, self::$addressMappedColumns, 'shipping_'],
+            ]),
         ];
     }
 
@@ -2009,7 +2060,11 @@ class FullmetrixStreamExporter
             $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
             $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
         }
-        $metaData = $this->mergeMeta($metaData, $this->extraColumnsMeta($row, self::$customerMappedColumns));
+        $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups([
+            [$row, self::$customerMappedColumns, ''],
+            [$primaryAddr, self::$addressMappedColumns, 'billing_'],
+            [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
+        ]));
 
         return [
             'id' => $customerId,
