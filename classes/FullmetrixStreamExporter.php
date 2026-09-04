@@ -56,6 +56,9 @@ class FullmetrixStreamExporter
         'address1', 'address2', 'city', 'postcode',
         'phone', 'phone_mobile', 'country', 'state', 'state_code',
         'id_country', 'id_state', 'deleted',
+        // Constant on a customer address, and repeated on every order payload.
+        'date_add', 'date_upd', 'active',
+        'id_manufacturer', 'id_supplier', 'id_warehouse',
     ];
 
     private static $productMappedColumns = [
