@@ -19,9 +19,62 @@ class FullmetrixStreamExporter
     private $batchSize = 1000;
     private $memoryLimitBytes;
     private $link;
-    private $orderColumnsCache;
     private $cartRuleColumnsCache;
     private $shopContextCache = [];
+
+    const META_VALUE_MAX_LENGTH = 1000;
+
+    private static $sensitiveColumns = [
+        'passwd', 'secure_key', 'last_passwd_gen',
+        'reset_password_token', 'reset_password_validity',
+    ];
+
+    private static $orderMappedColumns = [
+        'id_order', 'reference', 'id_customer', 'id_currency',
+        'id_shop', 'id_shop_group', 'id_address_delivery', 'id_address_invoice',
+        'current_state', 'module', 'payment', 'note',
+        'payment_method', 'payment_method_title',
+        'total_paid_tax_incl', 'total_paid_tax_excl',
+        'total_discounts_tax_incl', 'total_shipping_tax_incl',
+        'conversion_rate', 'date_add', 'date_upd',
+        'status_name', 'customer_email', 'id_default_group', 'currency_code',
+    ];
+
+    private static $customerMappedColumns = [
+        'id_customer', 'email', 'firstname', 'lastname', 'company',
+        'birthday', 'newsletter', 'id_gender', 'gender_name',
+        'id_default_group', 'id_shop', 'id_shop_group',
+        'date_add', 'date_upd', 'deleted',
+    ];
+
+    private static $addressMappedColumns = [
+        'id_address', 'id_customer', 'firstname', 'lastname', 'company',
+        'address1', 'address2', 'city', 'postcode',
+        'phone', 'phone_mobile', 'country', 'state', 'state_code',
+        'id_country', 'id_state', 'deleted',
+    ];
+
+    private static $productMappedColumns = [
+        'id_product', 'reference', 'price', 'wholesale_price', 'active',
+        'weight', 'ean13', 'upc', 'isbn', 'condition',
+        'id_manufacturer', 'id_supplier', 'supplier_reference',
+        'date_add', 'date_upd',
+        'name', 'description', 'description_short', 'link_rewrite',
+        'stock_quantity', 'manufacturer_name', 'supplier_name',
+    ];
+
+    private static $categoryMappedColumns = [
+        'id_category', 'id_parent', 'name', 'description', 'link_rewrite',
+        'date_add', 'date_upd', 'product_count',
+    ];
+
+    private static $couponMappedColumns = [
+        'id_cart_rule', 'code', 'description', 'name',
+        'reduction_percent', 'reduction_amount', 'reduction_currency',
+        'free_shipping', 'active', 'quantity', 'quantity_per_user',
+        'minimum_amount', 'minimum_amount_currency',
+        'date_from', 'date_to', 'date_add', 'date_upd', 'usage_count',
+    ];
 
     /**
      * @param int $idShop Shop ID
@@ -234,23 +287,52 @@ class FullmetrixStreamExporter
         // No-op — kept for forward compatibility
     }
 
-    private function detectOrderColumns()
+    /**
+     * Turn every column that is not already exposed as a top-level field into
+     * meta_data, so module-added and shop-specific columns reach the platform
+     * without having to be whitelisted here first.
+     */
+    private function extraColumnsMeta($row, array $mappedColumns)
     {
-        $cols = ['note' => false, 'total_wrapping_tax_incl' => false];
-        try {
-            $result = $this->db->executeS(
-                'SHOW COLUMNS FROM ' . $this->prefix . 'orders WHERE Field IN ("note", "total_wrapping_tax_incl")'
-            );
-            if (is_array($result)) {
-                foreach ($result as $row) {
-                    $cols[$row['Field']] = true;
-                }
-            }
-        } catch (Throwable $e) {
-            // Fallback: assume columns don't exist
+        if (!is_array($row)) {
+            return [];
         }
 
-        return $cols;
+        $meta = [];
+        foreach ($row as $key => $value) {
+            if (in_array($key, $mappedColumns, true) || in_array($key, self::$sensitiveColumns, true)) {
+                continue;
+            }
+            if ($value === null || $value === '' || !is_scalar($value)) {
+                continue;
+            }
+            $text = (string) $value;
+            if ($text === '0000-00-00' || $text === '0000-00-00 00:00:00') {
+                continue;
+            }
+            if (strlen($text) > self::META_VALUE_MAX_LENGTH) {
+                continue;
+            }
+            $meta[] = ['key' => $key, 'value' => $text];
+        }
+
+        return $meta;
+    }
+
+    private function mergeMeta(array $metaData, array $extras)
+    {
+        $seen = [];
+        foreach ($metaData as $item) {
+            $seen[$item['key']] = true;
+        }
+        foreach ($extras as $item) {
+            if (isset($seen[$item['key']])) {
+                continue;
+            }
+            $metaData[] = $item;
+        }
+
+        return $metaData;
     }
 
     private function streamOrdersFast($syncType, $since)
@@ -263,32 +345,10 @@ class FullmetrixStreamExporter
             $sinceWhere = ' AND o.date_upd > \'' . pSQL($since) . '\'';
         }
 
-        // Detect available optional columns once per sync (cached)
-        if ($this->orderColumnsCache === null) {
-            $this->orderColumnsCache = $this->detectOrderColumns();
-        }
-        $optionalCols = $this->orderColumnsCache;
-
         while (true) {
-            $noteCol = $optionalCols['note'] ? ', o.note' : ', \'\' AS note';
-            $wrappingCol = $optionalCols['total_wrapping_tax_incl']
-                ? ', o.total_wrapping_tax_incl'
-                : ', 0 AS total_wrapping_tax_incl';
-
-            $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
-                       o.id_shop, o.id_shop_group,
-                       o.id_address_delivery, o.id_address_invoice,
-                       o.current_state, o.module AS payment_method,
+            $sql = 'SELECT o.*,
+                       o.module AS payment_method,
                        o.payment AS payment_method_title,
-                       o.total_paid_tax_incl, o.total_paid_tax_excl,
-                       o.total_discounts_tax_incl,
-                       o.total_shipping_tax_incl,
-                       o.conversion_rate
-                       ' . $wrappingCol . ',
-                       o.total_products, o.total_products_wt,
-                       o.invoice_number, o.delivery_number
-                       ' . $noteCol . ',
-                       o.date_add, o.date_upd,
                        osl.name AS status_name,
                        c.email AS customer_email, c.id_default_group,
                        cur.iso_code AS currency_code
@@ -398,6 +458,7 @@ class FullmetrixStreamExporter
                         'coupon_lines' => $couponMap[$oid] ?? [],
                         'tax_lines' => [],
                         'payments' => $paymentMap[$row['reference']] ?? [],
+                        'meta_data' => $this->extraColumnsMeta($row, self::$orderMappedColumns),
                     ],
                 ]);
 
@@ -427,9 +488,7 @@ class FullmetrixStreamExporter
 
         $idsList = implode(',', array_map('intval', $addressIds));
 
-        $sql = 'SELECT a.id_address, a.firstname, a.lastname, a.company,
-                   a.address1, a.address2, a.city, a.postcode,
-                   a.phone, a.phone_mobile, a.vat_number,
+        $sql = 'SELECT a.*,
                    co.iso_code AS country, s.name AS state, s.iso_code AS state_code
             FROM ' . $this->prefix . 'address a
             LEFT JOIN ' . $this->prefix . 'country co ON a.id_country = co.id_country
@@ -455,7 +514,7 @@ class FullmetrixStreamExporter
                 'first_name' => '', 'last_name' => '', 'company' => '',
                 'address_1' => '', 'address_2' => '', 'city' => '',
                 'state' => '', 'postcode' => '', 'country' => '',
-                'email' => '', 'phone' => '',
+                'email' => '', 'phone' => '', 'meta_data' => [],
             ];
         }
 
@@ -471,6 +530,7 @@ class FullmetrixStreamExporter
             'country' => (string) ($addr['country'] ?? ''),
             'email' => '',
             'phone' => (string) ($addr['phone'] ?: ($addr['phone_mobile'] ?? '')),
+            'meta_data' => $this->extraColumnsMeta($addr, self::$addressMappedColumns),
         ];
     }
 
@@ -746,12 +806,7 @@ class FullmetrixStreamExporter
         }
 
         while (true) {
-            $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
-                       c.company, c.birthday, c.newsletter, c.optin,
-                       c.website, c.siret, c.ape, c.note,
-                       c.id_shop, c.id_shop_group,
-                       c.id_gender, c.id_default_group,
-                       c.date_add, c.date_upd,
+            $sql = 'SELECT c.*,
                        gl.name AS gender_name
                 FROM ' . $this->prefix . 'customer c
                 LEFT JOIN ' . $this->prefix . 'gender_lang gl
@@ -821,13 +876,11 @@ class FullmetrixStreamExporter
                 if (!empty($row['gender_name'])) {
                     $metaData[] = ['key' => 'gender', 'value' => (string) $row['gender_name']];
                 }
-                if (!empty($row['siret'])) {
-                    $metaData[] = ['key' => 'siret', 'value' => (string) $row['siret']];
-                }
                 if ($stats['order_count'] > 0) {
                     $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
                     $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
                 }
+                $metaData = $this->mergeMeta($metaData, $this->extraColumnsMeta($row, self::$customerMappedColumns));
 
                 $this->sendLine([
                     'type' => 'customer',
@@ -869,9 +922,7 @@ class FullmetrixStreamExporter
 
     private function batchLoadCustomerAddresses($customerIdsList)
     {
-        $sql = 'SELECT a.id_customer, a.id_address, a.alias, a.firstname, a.lastname,
-                   a.company, a.address1, a.address2, a.city, a.postcode,
-                   a.phone, a.phone_mobile, a.vat_number,
+        $sql = 'SELECT a.*,
                    co.iso_code AS country, s.name AS state, s.iso_code AS state_code
             FROM ' . $this->prefix . 'address a
             LEFT JOIN ' . $this->prefix . 'country co ON a.id_country = co.id_country
@@ -927,12 +978,7 @@ class FullmetrixStreamExporter
         }
 
         while (true) {
-            $sql = 'SELECT p.id_product, p.reference, p.price, p.wholesale_price,
-                       p.active, p.weight, p.width, p.height, p.depth,
-                       p.ean13, p.upc, p.isbn, p.condition, p.visibility,
-                       p.id_manufacturer, p.id_tax_rules_group, p.on_sale,
-                       p.id_supplier, p.supplier_reference,
-                       p.date_add, p.date_upd,
+            $sql = 'SELECT p.*,
                        pl.name, pl.description, pl.description_short, pl.link_rewrite,
                        sa.quantity AS stock_quantity,
                        m.name AS manufacturer_name,
@@ -1034,6 +1080,7 @@ class FullmetrixStreamExporter
                         'images' => $imageList,
                         'date_created' => $this->toIso($row['date_add']),
                         'date_modified' => $this->toIso($row['date_upd']),
+                        'meta_data' => $this->extraColumnsMeta($row, self::$productMappedColumns),
                     ],
                 ]);
                 ++$count;
@@ -1324,8 +1371,7 @@ class FullmetrixStreamExporter
         }
 
         while (true) {
-            $sql = 'SELECT c.id_category, c.id_parent, c.active, c.level_depth,
-                       c.date_add, c.date_upd,
+            $sql = 'SELECT c.*,
                        cl.name, cl.description, cl.link_rewrite
                 FROM ' . $this->prefix . 'category c
                 LEFT JOIN ' . $this->prefix . 'category_lang cl
@@ -1372,6 +1418,7 @@ class FullmetrixStreamExporter
                         'description' => (string) ($row['description'] ?? ''),
                         'count' => $countMap[$cid] ?? 0,
                         'image_url' => null,
+                        'meta_data' => $this->extraColumnsMeta($row, self::$categoryMappedColumns),
                     ],
                 ]);
                 ++$count;
@@ -1403,12 +1450,7 @@ class FullmetrixStreamExporter
         }
 
         while (true) {
-            $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
-                       cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
-                       cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
-                       cr.group_restriction, cr.shop_restriction,
-                       cr.minimum_amount, cr.minimum_amount_currency,
-                       cr.date_from, cr.date_to, cr.date_add,
+            $sql = 'SELECT cr.*,
                        crl.name
                 FROM ' . $this->prefix . 'cart_rule cr
                 LEFT JOIN ' . $this->prefix . 'cart_rule_lang crl
@@ -1476,6 +1518,7 @@ class FullmetrixStreamExporter
                         'date_created' => $this->toIso($row['date_add']),
                         'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
                             ? $this->toIso($row['date_to']) : null,
+                        'meta_data' => $this->extraColumnsMeta($row, self::$couponMappedColumns),
                     ],
                 ]);
                 ++$count;
@@ -1843,26 +1886,9 @@ class FullmetrixStreamExporter
 
     private function formatSingleOrder($orderId)
     {
-        $optionalCols = $this->detectOrderColumns();
-        $wrappingCol = $optionalCols['total_wrapping_tax_incl']
-            ? ', o.total_wrapping_tax_incl'
-            : ', 0 AS total_wrapping_tax_incl';
-        $noteCol = $optionalCols['note'] ? ', o.note' : ', \'\' AS note';
-
-        $sql = 'SELECT o.id_order, o.reference, o.id_customer, o.id_currency,
-                   o.id_shop, o.id_shop_group,
-                   o.id_address_delivery, o.id_address_invoice,
-                   o.current_state, o.module AS payment_method,
+        $sql = 'SELECT o.*,
+                   o.module AS payment_method,
                    o.payment AS payment_method_title,
-                   o.total_paid_tax_incl, o.total_paid_tax_excl,
-                   o.total_discounts_tax_incl,
-                   o.total_shipping_tax_incl,
-                   o.conversion_rate
-                   ' . $wrappingCol . ',
-                   o.total_products, o.total_products_wt,
-                   o.invoice_number, o.delivery_number
-                   ' . $noteCol . ',
-                   o.date_add, o.date_upd,
                    osl.name AS status_name,
                    c.email AS customer_email, c.id_default_group,
                    cur.iso_code AS currency_code
@@ -1925,15 +1951,13 @@ class FullmetrixStreamExporter
             'coupon_lines' => $couponMap[$orderId] ?? [],
             'tax_lines' => [],
             'payments' => $paymentMap[$row['reference']] ?? [],
+            'meta_data' => $this->extraColumnsMeta($row, self::$orderMappedColumns),
         ];
     }
 
     private function formatSingleCustomer($customerId)
     {
-        $sql = 'SELECT c.id_customer, c.email, c.firstname, c.lastname,
-                   c.company, c.birthday, c.newsletter, c.optin,
-                   c.id_shop, c.id_shop_group,
-                   c.id_gender, c.id_default_group, c.date_add, c.date_upd,
+        $sql = 'SELECT c.*,
                    gl.name AS gender_name
             FROM ' . $this->prefix . 'customer c
             LEFT JOIN ' . $this->prefix . 'gender_lang gl
@@ -1985,6 +2009,7 @@ class FullmetrixStreamExporter
             $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
             $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
         }
+        $metaData = $this->mergeMeta($metaData, $this->extraColumnsMeta($row, self::$customerMappedColumns));
 
         return [
             'id' => $customerId,
@@ -2006,11 +2031,7 @@ class FullmetrixStreamExporter
 
     private function formatSingleProduct($productId)
     {
-        $sql = 'SELECT p.id_product, p.reference, p.price, p.wholesale_price,
-                   p.active, p.weight, p.width, p.height, p.depth,
-                   p.ean13, p.upc, p.isbn, p.condition, p.visibility,
-                   p.on_sale, p.id_supplier, p.supplier_reference,
-                   p.date_add, p.date_upd,
+        $sql = 'SELECT p.*,
                    pl.name, pl.description, pl.description_short, pl.link_rewrite,
                    sa.quantity AS stock_quantity,
                    s.name AS supplier_name
@@ -2086,6 +2107,7 @@ class FullmetrixStreamExporter
             'images' => $imageList,
             'date_created' => $this->toIso($row['date_add']),
             'date_modified' => $this->toIso($row['date_upd']),
+            'meta_data' => $this->extraColumnsMeta($row, self::$productMappedColumns),
         ];
     }
 
@@ -2179,7 +2201,7 @@ class FullmetrixStreamExporter
 
     private function formatSingleCategory($categoryId)
     {
-        $sql = 'SELECT c.id_category, c.id_parent, c.active, c.date_add, c.date_upd,
+        $sql = 'SELECT c.*,
                    cl.name, cl.description, cl.link_rewrite,
                    COALESCE(cp_count.cnt, 0) AS product_count
             FROM ' . $this->prefix . 'category c
@@ -2204,17 +2226,13 @@ class FullmetrixStreamExporter
             'description' => (string) ($row['description'] ?? ''),
             'count' => (int) ($row['product_count'] ?? 0),
             'image_url' => null,
+            'meta_data' => $this->extraColumnsMeta($row, self::$categoryMappedColumns),
         ];
     }
 
     private function formatSingleCoupon($cartRuleId)
     {
-        $sql = 'SELECT cr.id_cart_rule, cr.code, cr.description,
-                   cr.reduction_percent, cr.reduction_amount, cr.reduction_currency,
-                   cr.free_shipping, cr.active, cr.quantity, cr.quantity_per_user,
-                   cr.group_restriction, cr.shop_restriction,
-                   cr.minimum_amount, cr.minimum_amount_currency,
-                   cr.date_from, cr.date_to, cr.date_add,
+        $sql = 'SELECT cr.*,
                    crl.name,
                    COALESCE(ocr_count.cnt, 0) AS usage_count
             FROM ' . $this->prefix . 'cart_rule cr
@@ -2260,6 +2278,7 @@ class FullmetrixStreamExporter
             'date_created' => $this->toIso($row['date_add']),
             'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
                 ? $this->toIso($row['date_to']) : null,
+            'meta_data' => $this->extraColumnsMeta($row, self::$couponMappedColumns),
         ];
     }
 
