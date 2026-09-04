@@ -1070,6 +1070,7 @@ class FullmetrixStreamExporter
 
             // Batch: slip details
             $detailMap = $this->batchLoadSlipDetails(implode(',', $slipIds));
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_order_slip', implode(',', $slipIds));
 
             foreach ($rows as $row) {
                 $sid = (int) $row['id_order_slip'];
@@ -1088,7 +1089,10 @@ class FullmetrixStreamExporter
                         'date_created' => $this->toIso($row['date_add']),
                         'refunded_by' => null,
                         'line_items' => $detailMap[$sid] ?? [],
-                        'meta_data' => $this->extraColumnsMeta($row, self::$refundMappedColumns),
+                        'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                            [[$row, self::$refundMappedColumns, '']],
+                            $relatedMap[$sid] ?? []
+                        )),
                     ],
                 ]);
 
@@ -1753,6 +1757,7 @@ class FullmetrixStreamExporter
                     $countMap[(int) $cr['id_category']] = (int) $cr['cnt'];
                 }
             }
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_category', $catIdsList);
             $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
@@ -1768,7 +1773,10 @@ class FullmetrixStreamExporter
                         'description' => (string) ($row['description'] ?? ''),
                         'count' => $countMap[$cid] ?? 0,
                         'image_url' => null,
-                        'meta_data' => $this->extraColumnsMeta($row, self::$categoryMappedColumns),
+                        'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                            [[$row, self::$categoryMappedColumns, '']],
+                            $relatedMap[$cid] ?? []
+                        )),
                     ],
                 ]);
                 ++$count;
@@ -1833,6 +1841,7 @@ class FullmetrixStreamExporter
                 }
             }
             $restrictionsMap = $this->batchLoadCartRuleRestrictions($crIdsList);
+            $relatedMap = $this->batchLoadRelatedTableMeta('id_cart_rule', $crIdsList);
             $shop = $this->getShopContext();
 
             foreach ($rows as $row) {
@@ -1868,7 +1877,10 @@ class FullmetrixStreamExporter
                         'date_created' => $this->toIso($row['date_add']),
                         'date_expires' => ($row['date_to'] && $row['date_to'] !== '0000-00-00 00:00:00')
                             ? $this->toIso($row['date_to']) : null,
-                        'meta_data' => $this->extraColumnsMeta($row, self::$couponMappedColumns),
+                        'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                            [[$row, self::$couponMappedColumns, '']],
+                            $relatedMap[$crId] ?? []
+                        )),
                     ],
                 ]);
                 ++$count;
