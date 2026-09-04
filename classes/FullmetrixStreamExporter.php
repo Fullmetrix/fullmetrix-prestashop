@@ -21,6 +21,7 @@ class FullmetrixStreamExporter
     private $link;
     private $cartRuleColumnsCache;
     private $relatedTablesCache = [];
+    private $sensitiveKeyCache = [];
     private $shopContextCache = [];
 
     const META_VALUE_MAX_LENGTH = 20000;
@@ -364,10 +365,12 @@ class FullmetrixStreamExporter
             if (!is_array($row)) {
                 continue;
             }
+            // Recherche en temps constant: les listes sont parcourues pour
+            // chaque colonne de chaque ligne, soit des millions de fois sur un
+            // gros catalogue.
+            $skip = array_flip($mappedColumns) + array_flip(self::$sensitiveColumns);
             foreach ($row as $key => $value) {
-                if (in_array($key, $mappedColumns, true)
-                    || in_array($key, self::$sensitiveColumns, true)
-                    || $this->isSensitiveKey($key)) {
+                if (isset($skip[$key]) || $this->isSensitiveKey($key)) {
                     continue;
                 }
                 if ($value === null || $value === '' || !is_scalar($value)) {
@@ -380,7 +383,9 @@ class FullmetrixStreamExporter
                 // A module column can hold binary or badly encoded bytes. Such a
                 // value would make json_encode fail and take the whole entity
                 // down with it.
-                if (preg_match('//u', $text) !== 1) {
+                // La validation UTF-8 complete ne sert que si un octet haut est
+                // present: l'ASCII est toujours valide, et c'est le cas courant.
+                if (preg_match('/[\x80-\xFF]/', $text) === 1 && preg_match('//u', $text) !== 1) {
                     continue;
                 }
                 $prefixedKey = $this->truncateUtf8($prefix . $key, self::META_KEY_MAX_LENGTH);
@@ -419,14 +424,20 @@ class FullmetrixStreamExporter
      */
     private function isSensitiveKey($key)
     {
+        if (isset($this->sensitiveKeyCache[$key])) {
+            return $this->sensitiveKeyCache[$key];
+        }
+
         $lower = strtolower((string) $key);
+        $sensible = false;
         foreach (self::$sensitiveKeyPatterns as $pattern) {
             if (strpos($lower, $pattern) !== false) {
-                return true;
+                $sensible = true;
+                break;
             }
         }
 
-        return false;
+        return $this->sensitiveKeyCache[$key] = $sensible;
     }
 
     private function truncateUtf8($text, $maxBytes)
