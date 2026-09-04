@@ -426,7 +426,7 @@ class FullmetrixStreamExporter
     // A shop can carry hundreds of tables. Only this many are followed per
     // entity, so a badly designed module cannot turn one sync into hundreds of
     // queries per batch.
-    const MAX_RELATED_TABLES = 12;
+    const MAX_RELATED_TABLES = 20;
 
     /**
      * Tables already exported on their own, plus the ones whose content would
@@ -444,6 +444,11 @@ class FullmetrixStreamExporter
         'connections_source', 'guest', 'page_viewed', 'pagenotfound',
         'search_index', 'search_word', 'statssearch', 'layered_product_attribute',
         'layered_filter', 'layered_price_index', 'image', 'image_shop', 'image_lang',
+        // Tables de pure jointure ou de cache: elles occuperaient un des
+        // emplacements sans rien apprendre.
+        'product_comment_criterion_product', 'product_comment_report',
+        'product_comment_usefulness', 'product_group_reduction_cache',
+        'customer_session', 'product_country_tax', 'cart_cart_rule',
     ];
 
     /**
@@ -480,6 +485,17 @@ class FullmetrixStreamExporter
                 foreach ($rows as $row) {
                     $tables[] = (string) $row['table_name'];
                 }
+            }
+            // Une troncature silencieuse laisserait croire a une couverture
+            // complete: on la trace pour pouvoir arbitrer la denylist.
+            if (count($tables) >= self::MAX_RELATED_TABLES) {
+                if (!class_exists('FullmetrixLogger')) {
+                    require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
+                }
+                FullmetrixLogger::log(
+                    'related_tables_capped',
+                    'Plafond atteint pour ' . $fkColumn . ', des tables ne sont pas exportees'
+                );
             }
         } catch (Throwable $e) {
             // An information_schema restricted by hosting must not break the sync.
@@ -2231,11 +2247,11 @@ class FullmetrixStreamExporter
             'coupon_lines' => $couponMap[$orderId] ?? [],
             'tax_lines' => [],
             'payments' => $paymentMap[$row['reference']] ?? [],
-            'meta_data' => $this->extraColumnsMetaGroups([
+            'meta_data' => $this->extraColumnsMetaGroups(array_merge([
                 [$row, self::$orderMappedColumns, ''],
                 [$addressMap[(int) $row['id_address_invoice']] ?? null, self::$addressMappedColumns, 'billing_'],
                 [$addressMap[(int) $row['id_address_delivery']] ?? null, self::$addressMappedColumns, 'shipping_'],
-            ]),
+            ], $this->batchLoadRelatedTableMeta('id_order', (string) $orderId)[$orderId] ?? [])),
         ];
     }
 
@@ -2293,11 +2309,11 @@ class FullmetrixStreamExporter
             $metaData[] = ['key' => 'orders_count', 'value' => (string) $stats['order_count']];
             $metaData[] = ['key' => 'total_spent', 'value' => (string) round($stats['total_spent'], 2)];
         }
-        $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups([
+        $metaData = $this->mergeMeta($metaData, $this->extraColumnsMetaGroups(array_merge([
             [$row, self::$customerMappedColumns, ''],
             [$primaryAddr, self::$addressMappedColumns, 'billing_'],
             [$shippingAddr, self::$addressMappedColumns, 'shipping_'],
-        ]));
+        ], $this->batchLoadRelatedTableMeta('id_customer', (string) $customerId)[$customerId] ?? [])));
 
         return [
             'id' => $customerId,
@@ -2395,7 +2411,10 @@ class FullmetrixStreamExporter
             'images' => $imageList,
             'date_created' => $this->toIso($row['date_add']),
             'date_modified' => $this->toIso($row['date_upd']),
-            'meta_data' => $this->extraColumnsMeta($row, self::$productMappedColumns),
+            'meta_data' => $this->extraColumnsMetaGroups(array_merge(
+                [[$row, self::$productMappedColumns, '']],
+                $this->batchLoadRelatedTableMeta('id_product', $pidList)[$pid] ?? []
+            )),
         ];
     }
 
