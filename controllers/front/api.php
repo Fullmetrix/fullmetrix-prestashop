@@ -314,14 +314,14 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         if (array_key_exists('startsAt', $payload)) {
             $cartRule->date_from = $payload['startsAt'] ? date('Y-m-d H:i:s', strtotime($payload['startsAt'])) : date('Y-m-d H:i:s');
         } elseif (!$cartRule->id) {
-            // New cart rule — default to now
+            // New cart rule, default to now
             $cartRule->date_from = date('Y-m-d H:i:s');
         }
 
         if (array_key_exists('expiresAt', $payload)) {
             $cartRule->date_to = $payload['expiresAt'] ? date('Y-m-d H:i:s', strtotime($payload['expiresAt'])) : '0000-00-00 00:00:00';
         } elseif (!$cartRule->id) {
-            // New cart rule — default to 1 year from now
+            // New cart rule, default to 1 year from now
             $cartRule->date_to = date('Y-m-d H:i:s', strtotime('+1 year'));
         }
 
@@ -403,7 +403,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $perPage = min(500, max(1, (int) Tools::getValue('per_page', 100)));
 
         if ($type === 'command') {
-            // Command requests have body-signed HMAC — re-verify
+            // Command requests have body-signed HMAC, re-verify
             $cmdVerify = $this->verifyCommandRequest();
             if ($cmdVerify !== true) {
                 $this->sendJsonError($cmdVerify['error'], $cmdVerify['status']);

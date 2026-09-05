@@ -335,7 +335,7 @@ class FullmetrixStreamExporter
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
         header('X-Frame-Options: SAMEORIGIN');
         header('X-Content-Type-Options: nosniff');
-        // Let the web server (Apache/nginx) handle gzip via mod_deflate —
+        // Let the web server (Apache/nginx) handle gzip via mod_deflate,
         // doing it in PHP with ob_gzhandler breaks progressive streaming
     }
 
