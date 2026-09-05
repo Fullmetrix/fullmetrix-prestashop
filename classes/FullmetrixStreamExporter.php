@@ -95,6 +95,11 @@ class FullmetrixStreamExporter
         'id_shop', 'id_shop_group',
     ];
 
+    private static $combinationMappedColumns = [
+        'id_product', 'id_product_attribute', 'reference', 'ean13', 'upc',
+        'price', 'weight', 'price_impact', 'weight_impact', 'quantity', 'attributes',
+    ];
+
     private static $lineItemMappedColumns = [
         'id_order', 'id_order_detail', 'product_name',
         'product_quantity', 'product_reference',
@@ -1480,6 +1485,7 @@ class FullmetrixStreamExporter
                                 'upc' => (string) ($combo['upc'] ?? ''),
                                 'category_ids' => [],
                                 'parent_id' => $pid,
+                                'meta_data' => $this->extraColumnsMeta($combo, self::$combinationMappedColumns),
                                 'image_url' => $imageUrl,
                                 'images' => [],
                                 'date_created' => $this->toIso($row['date_add']),
@@ -1687,7 +1693,7 @@ class FullmetrixStreamExporter
 
     private function batchLoadCombinations($productIdsList)
     {
-        $sql = 'SELECT pa.id_product, pa.id_product_attribute, pa.reference, pa.ean13, pa.upc,
+        $sql = 'SELECT pa.*,
                    pa.price AS price_impact, pa.weight AS weight_impact,
                    sa.quantity,
                    GROUP_CONCAT(DISTINCT al.name ORDER BY al.name SEPARATOR \', \') AS attributes
