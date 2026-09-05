@@ -4,6 +4,31 @@ All notable changes to the Fullmetrix PrestaShop connector are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning where practical.
 
+## 1.6.1
+
+### Fixed
+
+- Stops detaching the response with `fastcgi_finish_request()`. On PHP-FPM it ran
+  before PrestaShop wrote its session cookie from `Cookie::__destruct()`. On login,
+  `updateCustomer()` writes the cookie and only then `registerSession()` adds
+  `session_id` and `session_token`, so those two keys were still pending when the
+  response was released, and were lost. `isSessionAlive()` then failed on the next
+  request and the customer was bounced back to the login page indefinitely.
+
+  The previous workaround forced `Cookie::write()` from the shutdown handler. It
+  worked, but it depended on PrestaShop's internal ordering and required a
+  `Context` call on the shutdown path.
+
+  The response is no longer detached at all. This is not a new code path: shops
+  that are not on FPM have always run it, short timeouts included. Measured on the
+  test shop, a flush costs under 200 ms including payload construction, and is
+  capped at 800 ms per entity by the existing timeouts. Only requests that queued
+  something reach the flush, so page views are unaffected: the cost falls on cart
+  updates, login and order validation.
+
+  `isClientDetached()` and the dual timeout budgets introduced in 1.5.7 are removed
+  as a consequence; a single set of timeouts now applies everywhere.
+
 ## 1.5.7
 
 ### Fixed
