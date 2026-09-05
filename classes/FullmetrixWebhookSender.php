@@ -16,8 +16,16 @@ if (!defined('_PS_VERSION_')) {
  * Queue + flush design: hooks enqueue {entity_type, id} pairs,
  * then the shutdown hook deduplicates and sends one POST per entity.
  *
- * On FPM: fastcgi_finish_request releases the client before any HTTP call.
- * On non-FPM: aggressive timeouts cap the worst-case latency for the client.
+ * The response is never detached. fastcgi_finish_request would run before
+ * PrestaShop writes its session cookie from Cookie::__destruct(), silently
+ * dropping the session_id/session_token that registerSession() adds on login,
+ * which locks the customer out on the next request. Aggressive timeouts cap
+ * the worst-case latency for the client instead: a flush measures under 200ms
+ * (payload build plus one POST), bounded at 800ms per entity if the API is
+ * unreachable.
+ *
+ * Only requests that actually queued something reach the flush, so page views
+ * are untouched: the cost falls on cart updates, login and order validation.
  */
 class FullmetrixWebhookSender
 {
@@ -33,8 +41,11 @@ class FullmetrixWebhookSender
     /** @var Link|null */
     private static $link;
 
-    /** @var bool Shared flag so fastcgi_finish_request is only called once per request */
-    public static $responseFinished = false;
+    /** Connect timeout, in ms, while the visitor waits on the response. */
+    public const CONNECT_TIMEOUT_MS = 300;
+
+    /** Total timeout, in ms, while the visitor waits on the response. */
+    public const TOTAL_TIMEOUT_MS = 800;
 
     public static function init($idShop = 1, $link = null)
     {
@@ -82,58 +93,14 @@ class FullmetrixWebhookSender
     }
 
     /**
-     * Persist the PrestaShop cookie before the response is detached.
-     *
-     * Cookie::write() bails out on headers_sent(), and PrestaShop only writes
-     * the cookie from Cookie::__destruct(), which PHP runs *after* the shutdown
-     * functions we register. On login, updateCustomer() writes the cookie and
-     * only then adds session_id/session_token via registerSession(),
-     * so those two keys are still pending at shutdown. Detaching the response
-     * first drops them, isSessionAlive() then fails on the next request and the
-     * customer is bounced back to the login page, forever.
+     * Keep flushing even if the visitor navigates away mid-request, otherwise
+     * an abort during the POST would lose the entity for good.
      */
-    private static function flushPendingCookie()
+    public static function keepRunningAfterAbort()
     {
-        try {
-            $context = Context::getContext();
-            if ($context && isset($context->cookie) && $context->cookie instanceof Cookie) {
-                $context->cookie->write();
-            }
-        } catch (Throwable $e) {
-            // Never let cookie persistence break the response
-        }
-    }
-
-    /**
-     * Release the client response if we're under FPM. Idempotent across senders.
-     */
-    public static function finishResponse()
-    {
-        if (self::$responseFinished) {
-            return;
-        }
-        self::$responseFinished = true;
-
-        self::flushPendingCookie();
-
-        if (function_exists('fastcgi_finish_request')) {
-            @fastcgi_finish_request();
-        }
         if (function_exists('ignore_user_abort')) {
             @ignore_user_abort(true);
         }
-    }
-
-    /**
-     * Returns true if the response has actually been flushed to the client.
-     *
-     * Callers must ask this, never `function_exists('fastcgi_finish_request')`:
-     * the latter only says FPM is available, not that the visitor has been
-     * released. Anything still on the rendering path is waited on by a browser.
-     */
-    public static function isClientDetached()
-    {
-        return self::$responseFinished && function_exists('fastcgi_finish_request');
     }
 
     public static function flushQueue()
@@ -142,7 +109,7 @@ class FullmetrixWebhookSender
             return;
         }
 
-        self::finishResponse();
+        self::keepRunningAfterAbort();
 
         try {
             $secret = Configuration::get('FULLMETRIX_CONNECTION_SECRET');
@@ -155,9 +122,8 @@ class FullmetrixWebhookSender
 
             $apiUrl = str_replace('/api/plugin', '/api/webhooks/ecommerce', FullmetrixConnector::getApiBase());
 
-            $clientDetached = self::isClientDetached();
-            $connectTimeoutMs = $clientDetached ? 2000 : 300;
-            $totalTimeoutMs = $clientDetached ? 3000 : 800;
+            $connectTimeoutMs = self::CONNECT_TIMEOUT_MS;
+            $totalTimeoutMs = self::TOTAL_TIMEOUT_MS;
 
             $exporters = [];
             foreach (self::$queue as $entry) {

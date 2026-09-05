@@ -18,6 +18,3 @@ parameters:
             paths:
                 - ../../fullmetrixconnector.php
                 - ../../controllers/front/api.php
-        -
-            message: '#Instanceof between Cookie and Cookie will always evaluate to true#'
-            path: ../../classes/FullmetrixWebhookSender.php

@@ -79,7 +79,7 @@ class FullmetrixTrackingSender
             return;
         }
 
-        FullmetrixWebhookSender::finishResponse();
+        FullmetrixWebhookSender::keepRunningAfterAbort();
 
         try {
             $visitorId = self::readVisitorId();
@@ -116,9 +116,8 @@ class FullmetrixTrackingSender
 
             $headers = FullmetrixSecurity::createSignedHeaders($secret, $code, $payload);
 
-            $clientDetached = FullmetrixWebhookSender::isClientDetached();
-            $connectTimeoutMs = $clientDetached ? 2000 : 300;
-            $totalTimeoutMs = $clientDetached ? 3000 : 800;
+            $connectTimeoutMs = FullmetrixWebhookSender::CONNECT_TIMEOUT_MS;
+            $totalTimeoutMs = FullmetrixWebhookSender::TOTAL_TIMEOUT_MS;
 
             self::curlPost($apiUrl, $payload, $headers, $connectTimeoutMs, $totalTimeoutMs);
         } catch (Throwable $e) {

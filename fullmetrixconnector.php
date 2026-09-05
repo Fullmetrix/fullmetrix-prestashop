@@ -330,9 +330,8 @@ class FullmetrixConnector extends Module
             // This runs inside hookDisplayHeader, so the visitor is still waiting
             // on the page. Stay well under what a shopper would notice; the config
             // only toggles the tracker and a miss is cached for 5 minutes anyway.
-            $clientDetached = FullmetrixWebhookSender::isClientDetached();
-            $connectTimeoutMs = $clientDetached ? 1000 : 200;
-            $totalTimeoutMs = $clientDetached ? 2000 : 500;
+            $connectTimeoutMs = 200;
+            $totalTimeoutMs = 500;
 
             $apiBase = self::getConfig('FULLMETRIX_API_BASE');
             if (empty($apiBase)) {
@@ -578,7 +577,7 @@ class FullmetrixConnector extends Module
             return;
         }
 
-        FullmetrixWebhookSender::finishResponse();
+        FullmetrixWebhookSender::keepRunningAfterAbort();
 
         try {
             if (!function_exists('curl_init')) {
@@ -587,9 +586,8 @@ class FullmetrixConnector extends Module
                 return;
             }
 
-            $clientDetached = FullmetrixWebhookSender::isClientDetached();
-            $connectTimeoutMs = $clientDetached ? 1500 : 200;
-            $totalTimeoutMs = $clientDetached ? 3000 : 500;
+            $connectTimeoutMs = 200;
+            $totalTimeoutMs = 500;
 
             foreach (self::$pendingConsents as $consent) {
                 try {
