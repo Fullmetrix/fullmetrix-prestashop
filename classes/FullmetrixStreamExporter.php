@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -24,15 +25,15 @@ class FullmetrixStreamExporter
     private $sensitiveKeyCache = [];
     private $shopContextCache = [];
 
-    const META_VALUE_MAX_LENGTH = 20000;
+    public const META_VALUE_MAX_LENGTH = 20000;
 
-    const META_TOTAL_MAX_LENGTH = 65536;
+    public const META_TOTAL_MAX_LENGTH = 65536;
 
-    const META_SHORT_VALUE_LENGTH = 512;
+    public const META_SHORT_VALUE_LENGTH = 512;
 
     // The reporting engine cannot address a key longer than this, so a longer
     // one would be paid for in every payload and never usable.
-    const META_KEY_MAX_LENGTH = 80;
+    public const META_KEY_MAX_LENGTH = 80;
 
     private static $sensitiveColumns = [
         'passwd', 'secure_key', 'last_passwd_gen',
@@ -231,7 +232,6 @@ class FullmetrixStreamExporter
 
         $this->recordSyncCompletion([$entity => $count]);
 
-        $this->finishStream();
         exit;
     }
 
@@ -269,7 +269,6 @@ class FullmetrixStreamExporter
 
         $this->recordSyncCompletion($counts);
 
-        $this->finishStream();
         exit;
     }
 
@@ -301,7 +300,6 @@ class FullmetrixStreamExporter
 
         $this->recordSyncCompletion(['orders' => $count]);
 
-        $this->finishStream();
         exit;
     }
 
@@ -339,11 +337,6 @@ class FullmetrixStreamExporter
         header('X-Content-Type-Options: nosniff');
         // Let the web server (Apache/nginx) handle gzip via mod_deflate —
         // doing it in PHP with ob_gzhandler breaks progressive streaming
-    }
-
-    private function finishStream()
-    {
-        // No-op — kept for forward compatibility
     }
 
     /**
@@ -474,7 +467,7 @@ class FullmetrixStreamExporter
     // A shop can carry hundreds of tables. Only this many are followed per
     // entity, so a badly designed module cannot turn one sync into hundreds of
     // queries per batch.
-    const MAX_RELATED_TABLES = 20;
+    public const MAX_RELATED_TABLES = 20;
 
     /**
      * Tables already exported on their own, plus the ones whose content would
@@ -2118,6 +2111,7 @@ class FullmetrixStreamExporter
                     'message' => 'A database error occurred while exporting data.',
                     'attempt' => $attempt + 1,
                 ]);
+
                 return false;
             }
             if ($rows === false) {
@@ -2131,10 +2125,13 @@ class FullmetrixStreamExporter
                     'message' => 'SQL error' . ($context ? ' [' . $context . ']' : '') . ': ' . $error,
                     'attempt' => $attempt + 1,
                 ]);
+
                 return false;
             }
+
             return is_array($rows) ? $rows : [];
         }
+
         return false;
     }
 

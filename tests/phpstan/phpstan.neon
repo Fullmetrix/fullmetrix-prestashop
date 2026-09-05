@@ -1,0 +1,23 @@
+includes:
+    - %currentWorkingDirectory%/vendor/prestashop/php-dev-tools/phpstan/ps-module-extension.neon
+
+parameters:
+    paths:
+        - ../../
+    excludePaths:
+        - ../../vendor (?)
+        - ../../tests (?)
+    reportUnmatchedIgnoredErrors: false
+    level: 5
+    ignoreErrors:
+        # Le module cible PrestaShop 1.6 a 9. Les gardes ci-dessous couvrent des
+        # versions ou la methode n existe pas ou renvoie autre chose que ce que
+        # declarent les stubs de la version analysee.
+        -
+            message: '#Call to function (is_array|is_string|method_exists)\(\) with .* will always evaluate to true#'
+            paths:
+                - ../../fullmetrixconnector.php
+                - ../../controllers/front/api.php
+        -
+            message: '#Instanceof between Cookie and Cookie will always evaluate to true#'
+            path: ../../classes/FullmetrixWebhookSender.php

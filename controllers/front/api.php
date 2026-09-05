@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -53,6 +54,8 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     public function display()
     {
         $this->displayAjax();
+
+        return true;
     }
 
     public function displayAjax()
@@ -63,6 +66,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
                 $verifyResult = $this->verifyRequest();
                 if ($verifyResult !== true) {
                     $this->sendJsonError($verifyResult['error'], $verifyResult['status']);
+
                     return;
                 }
             }
@@ -131,6 +135,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (!is_array($body) || empty($body['action'])) {
             $this->sendJsonError('Missing action', 400);
+
             return;
         }
 
@@ -156,6 +161,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     {
         if (empty($payload['code'])) {
             $this->sendJsonError('Missing coupon code', 400);
+
             return;
         }
 
@@ -174,6 +180,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (!$cartRule->add()) {
             $this->sendJsonError('Failed to create cart rule', 500);
+
             return;
         }
 
@@ -190,12 +197,14 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     {
         if (empty($payload['id'])) {
             $this->sendJsonError('Missing coupon id', 400);
+
             return;
         }
 
         $cartRule = new CartRule((int) $payload['id']);
         if (!Validate::isLoadedObject($cartRule)) {
             $this->sendJsonError('Cart rule not found', 404);
+
             return;
         }
 
@@ -214,6 +223,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (!$cartRule->update()) {
             $this->sendJsonError('Failed to update cart rule', 500);
+
             return;
         }
 
@@ -230,17 +240,20 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     {
         if (empty($payload['id'])) {
             $this->sendJsonError('Missing coupon id', 400);
+
             return;
         }
 
         $cartRule = new CartRule((int) $payload['id']);
         if (!Validate::isLoadedObject($cartRule)) {
             $this->sendJsonError('Cart rule not found', 404);
+
             return;
         }
 
         if (!$cartRule->delete()) {
             $this->sendJsonError('Failed to delete cart rule', 500);
+
             return;
         }
 
@@ -394,14 +407,17 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $cmdVerify = $this->verifyCommandRequest();
             if ($cmdVerify !== true) {
                 $this->sendJsonError($cmdVerify['error'], $cmdVerify['status']);
+
                 return;
             }
             $this->handleCommand();
+
             return;
         }
 
         if ($type === 'stream' || $type === 'stream_orders') {
             $this->handleStream($type, $syncType, $since);
+
             return;
         }
 
@@ -410,24 +426,29 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
             $validEntities = ['orders', 'customers', 'products', 'categories', 'coupons', 'refunds', 'carts'];
             if (!in_array($entity, $validEntities, true)) {
                 $this->sendJsonError('Invalid entity', 400);
+
                 return;
             }
             $this->handleStreamEntity($entity, $syncType, $since);
+
             return;
         }
 
         if ($type === 'counts') {
             $this->handleCounts();
+
             return;
         }
 
         if ($type === 'settings') {
             $this->handleSettings();
+
             return;
         }
 
         if ($type === 'updated') {
             $this->handleUpdated();
+
             return;
         }
 

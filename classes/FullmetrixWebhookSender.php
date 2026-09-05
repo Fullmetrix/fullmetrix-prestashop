@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -149,6 +150,7 @@ class FullmetrixWebhookSender
             $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
             if (empty($secret) || empty($code)) {
                 self::$queue = [];
+
                 return;
             }
 
@@ -219,7 +221,7 @@ class FullmetrixWebhookSender
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_HTTPHEADER => $headerLines,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_NOSIGNAL => 1,
+            CURLOPT_NOSIGNAL => true,
             CURLOPT_CONNECTTIMEOUT_MS => (int) $connectTimeoutMs,
             CURLOPT_TIMEOUT_MS => (int) $totalTimeoutMs,
             CURLOPT_SSL_VERIFYPEER => true,

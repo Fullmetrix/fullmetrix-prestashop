@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -145,6 +146,7 @@ class FullmetrixFastExporter
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
             FullmetrixLogger::logException('fast_export_orders', $e);
+
             return ['success' => false, 'error' => 'Export failed', 'meta' => ['total' => 0]];
         }
     }
@@ -326,6 +328,7 @@ class FullmetrixFastExporter
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
             FullmetrixLogger::logException('fast_export_products', $e);
+
             return ['success' => false, 'error' => 'Export failed', 'meta' => ['total' => 0]];
         }
     }
@@ -510,6 +513,7 @@ class FullmetrixFastExporter
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
             FullmetrixLogger::logException('fast_export_customers', $e);
+
             return ['success' => false, 'error' => 'Export failed', 'meta' => ['total' => 0]];
         }
     }
@@ -568,6 +572,7 @@ class FullmetrixFastExporter
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
             FullmetrixLogger::logException('fast_export_categories', $e);
+
             return ['success' => false, 'error' => 'Export failed', 'meta' => ['total' => 0]];
         }
     }
@@ -638,6 +643,7 @@ class FullmetrixFastExporter
                 require_once _PS_MODULE_DIR_ . 'fullmetrixconnector/classes/FullmetrixLogger.php';
             }
             FullmetrixLogger::logException('fast_export_coupons', $e);
+
             return ['success' => false, 'error' => 'Export failed', 'meta' => ['total' => 0]];
         }
     }

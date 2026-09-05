@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -309,10 +310,12 @@ class FullmetrixConnector extends Module
                 $cachedData = json_decode($cached, true);
                 if (is_array($cachedData) && isset($cachedData['_ts']) && (time() - $cachedData['_ts']) < 1800) {
                     self::$cachedConfigThisRequest = $cachedData;
+
                     return $cachedData;
                 }
                 if (is_array($cachedData) && isset($cachedData['_failed_at']) && (time() - $cachedData['_failed_at']) < 300) {
                     self::$cachedConfigThisRequest = $cachedData;
+
                     return $cachedData;
                 }
             }
@@ -321,6 +324,7 @@ class FullmetrixConnector extends Module
             $code = self::getConfig('FULLMETRIX_CONNECTION_CODE');
             if (empty($secret) || empty($code)) {
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+
                 return self::$cachedConfigThisRequest;
             }
 
@@ -341,13 +345,14 @@ class FullmetrixConnector extends Module
             $ch = curl_init($apiBase . '/config');
             if (!$ch) {
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+
                 return self::$cachedConfigThisRequest;
             }
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_CONNECTTIMEOUT_MS => $connectTimeoutMs,
                 CURLOPT_TIMEOUT_MS => $totalTimeoutMs,
-                CURLOPT_NOSIGNAL => 1,
+                CURLOPT_NOSIGNAL => true,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_HTTPHEADER => [
@@ -370,6 +375,7 @@ class FullmetrixConnector extends Module
                     self::$configCache[$cacheKey] = $negativeJson;
                 }
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+
                 return self::$cachedConfigThisRequest;
             }
 
@@ -383,6 +389,7 @@ class FullmetrixConnector extends Module
                     self::$configCache[$cacheKey] = $negativeJson;
                 }
                 self::$cachedConfigThisRequest = is_array($cachedData) ? $cachedData : null;
+
                 return self::$cachedConfigThisRequest;
             }
 
@@ -395,6 +402,7 @@ class FullmetrixConnector extends Module
         } catch (Throwable $e) {
             FullmetrixLogger::logException('getCachedConfig', $e);
             self::$cachedConfigThisRequest = null;
+
             return null;
         }
     }
@@ -428,6 +436,7 @@ class FullmetrixConnector extends Module
             return $this->display(__FILE__, 'views/templates/hook/header.tpl');
         } catch (Throwable $e) {
             FullmetrixLogger::logException('hookDisplayHeader', $e);
+
             return '';
         }
     }
@@ -439,9 +448,11 @@ class FullmetrixConnector extends Module
                 return '';
             }
             $this->getCachedConfig();
+
             return '';
         } catch (Throwable $e) {
             FullmetrixLogger::logException('hookDisplayFooter', $e);
+
             return '';
         }
     }
@@ -573,6 +584,7 @@ class FullmetrixConnector extends Module
         try {
             if (!function_exists('curl_init')) {
                 self::$pendingConsents = [];
+
                 return;
             }
 
@@ -592,7 +604,7 @@ class FullmetrixConnector extends Module
                         CURLOPT_POSTFIELDS => $consent['body'],
                         CURLOPT_CONNECTTIMEOUT_MS => $connectTimeoutMs,
                         CURLOPT_TIMEOUT_MS => $totalTimeoutMs,
-                        CURLOPT_NOSIGNAL => 1,
+                        CURLOPT_NOSIGNAL => true,
                         CURLOPT_SSL_VERIFYPEER => true,
                         CURLOPT_FOLLOWLOCATION => false,
                         CURLOPT_HTTPHEADER => $consent['headers'],
@@ -764,6 +776,7 @@ class FullmetrixConnector extends Module
         FullmetrixWebhookSender::enqueue('product', $productId);
         if ($attributeId > 0) {
             FullmetrixWebhookSender::enqueue('product', $productId . '_' . $attributeId);
+
             return;
         }
 
@@ -1081,9 +1094,11 @@ class FullmetrixConnector extends Module
                 return null;
             }
             $separator = (strpos($baseUrl, '?') !== false) ? '&' : '?';
+
             return $baseUrl . $separator . 'fm_cart=' . $encoded . '&fm_cart_sig=' . $signature;
         } catch (Throwable $e) {
             FullmetrixLogger::logException('buildCartRecoveryUrl', $e);
+
             return null;
         }
     }
@@ -1135,6 +1150,7 @@ class FullmetrixConnector extends Module
 
         if (!$isRegistered) {
             $output .= $this->renderForm();
+
             return $output;
         }
 
@@ -1287,10 +1303,12 @@ class FullmetrixConnector extends Module
             }
             if ($diff < 3600) {
                 $mins = (int) floor($diff / 60);
+
                 return sprintf($this->l('%d min ago'), $mins);
             }
             if ($diff < 86400) {
                 $hours = (int) floor($diff / 3600);
+
                 return sprintf($this->l('%d h ago'), $hours);
             }
 
@@ -1311,11 +1329,13 @@ class FullmetrixConnector extends Module
             if ($seconds < 3600) {
                 $mins = (int) floor($seconds / 60);
                 $secs = $seconds % 60;
+
                 return sprintf($this->l('%d min %d sec'), $mins, $secs);
             }
 
             $hours = (int) floor($seconds / 3600);
             $mins = (int) floor(($seconds % 3600) / 60);
+
             return sprintf($this->l('%d h %d min'), $hours, $mins);
         } catch (Throwable $e) {
             return '';
@@ -1370,6 +1390,7 @@ class FullmetrixConnector extends Module
 
             if ($statusCode !== 200 || empty($result['success'])) {
                 $errorMessage = isset($result['error']) ? $result['error'] : $this->l('Unknown error');
+
                 return sprintf($this->l('Registration failed: %s'), $errorMessage);
             }
 
@@ -1383,6 +1404,7 @@ class FullmetrixConnector extends Module
             return true;
         } catch (Throwable $e) {
             FullmetrixLogger::logException('registerWithFullmetrix', $e);
+
             return $this->l('Connection error to Fullmetrix server');
         }
     }
@@ -1429,6 +1451,7 @@ class FullmetrixConnector extends Module
             $domain = $this->context->shop->domain;
             $physicalUri = $this->context->shop->physical_uri;
             $shopUrl = ($ssl ? 'https://' : 'http://') . $domain . $physicalUri;
+
             return rtrim($shopUrl, '/');
         } catch (Throwable $e) {
             return Tools::getShopDomainSsl(true);
@@ -1475,6 +1498,7 @@ class FullmetrixConnector extends Module
     {
         $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
         $registered = Configuration::get('FULLMETRIX_REGISTERED');
+
         return !empty($code) && $registered;
     }
 }

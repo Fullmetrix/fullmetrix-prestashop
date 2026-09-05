@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -86,6 +87,7 @@ class FullmetrixTrackingSender
             $sessionId = self::readSessionId();
             if (!$visitorId || !$sessionId) {
                 self::$events = [];
+
                 return;
             }
 
@@ -93,6 +95,7 @@ class FullmetrixTrackingSender
             $code = Configuration::get('FULLMETRIX_CONNECTION_CODE');
             if (empty($secret) || empty($code)) {
                 self::$events = [];
+
                 return;
             }
 
@@ -108,6 +111,7 @@ class FullmetrixTrackingSender
 
             if ($payload === false) {
                 self::$events = [];
+
                 return;
             }
 
@@ -145,7 +149,7 @@ class FullmetrixTrackingSender
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_HTTPHEADER => $headerLines,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_NOSIGNAL => 1,
+            CURLOPT_NOSIGNAL => true,
             CURLOPT_CONNECTTIMEOUT_MS => (int) $connectTimeoutMs,
             CURLOPT_TIMEOUT_MS => (int) $totalTimeoutMs,
             CURLOPT_SSL_VERIFYPEER => true,
@@ -160,6 +164,7 @@ class FullmetrixTrackingSender
         if (!isset($_COOKIE['fm_vid'])) {
             return null;
         }
+
         return self::sanitizeId($_COOKIE['fm_vid']);
     }
 
@@ -168,6 +173,7 @@ class FullmetrixTrackingSender
         if (!isset($_COOKIE['fm_sid'])) {
             return null;
         }
+
         return self::sanitizeId($_COOKIE['fm_sid']);
     }
 
@@ -177,6 +183,7 @@ class FullmetrixTrackingSender
             return null;
         }
         $value = substr($value, 0, 64);
+
         return preg_match('/^[a-zA-Z0-9_\-]{1,64}$/', $value) ? $value : null;
     }
 
@@ -210,6 +217,7 @@ class FullmetrixTrackingSender
             }
             $sanitized[$key] = $value;
         }
+
         return empty($sanitized) ? null : $sanitized;
     }
 

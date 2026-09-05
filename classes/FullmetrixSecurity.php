@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -30,6 +31,7 @@ class FullmetrixSecurity
     public static function signRequest($secret, $body, $timestamp)
     {
         $message = $timestamp . '.' . $body;
+
         return hash_hmac('sha256', $message, $secret);
     }
 
