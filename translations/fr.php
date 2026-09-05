@@ -1,5 +1,11 @@
 <?php
-
+/**
+ * Fullmetrix - E-commerce analytics platform connector
+ *
+ * @author    Fullmetrix <contact@fullmetrix.com>
+ * @copyright 2024-2026 Fullmetrix
+ * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License 3.0
+ */
 global $_MODULE;
 $_MODULE = [];
 $_MODULE['<{fullmetrixconnector}prestashop>connected_538d2d7d0a99fa37b7876edbb5e92502'] = 'Analyse et reporting e-commerce';

@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Fullmetrix - E-commerce analytics platform connector
  *
@@ -54,8 +53,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
     public function display()
     {
         $this->displayAjax();
-
-        return true;
     }
 
     public function displayAjax()
