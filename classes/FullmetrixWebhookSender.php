@@ -86,8 +86,8 @@ class FullmetrixWebhookSender
      *
      * Cookie::write() bails out on headers_sent(), and PrestaShop only writes
      * the cookie from Cookie::__destruct(), which PHP runs *after* the shutdown
-     * functions we register. On login, Context::updateCustomer() writes the
-     * cookie and only then adds session_id/session_token via registerSession(),
+     * functions we register. On login, updateCustomer() writes the cookie and
+     * only then adds session_id/session_token via registerSession(),
      * so those two keys are still pending at shutdown. Detaching the response
      * first drops them, isSessionAlive() then fails on the next request and the
      * customer is bounced back to the login page, forever.
