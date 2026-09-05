@@ -21,7 +21,7 @@ require_once dirname(__FILE__) . '/classes/FullmetrixLogger.php';
 class FullmetrixConnector extends Module
 {
     public const FULLMETRIX_API_BASE = 'https://fullmetrix.com/api/plugin';
-    public const FULLMETRIX_VERSION = '1.5.7';
+    public const FULLMETRIX_VERSION = '1.6.0';
     public const FULLMETRIX_CHANNEL = 'community';
 
     /** Lifetime of a signed cart-recovery link, in seconds (30 days). */
@@ -87,7 +87,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '1.5.7';
+        $this->version = '1.6.0';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
