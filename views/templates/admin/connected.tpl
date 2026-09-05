@@ -13,7 +13,8 @@
             <div style="font-size:13px;color:#6b7280;margin-top:3px;">{l s='E-commerce analytics and reporting' mod='fullmetrixconnector'}</div>
         </div>
         <span style="display:inline-flex;align-items:center;gap:7px;background:#e8f6ee;color:#1a8245;font-size:13px;font-weight:600;padding:8px 16px;border-radius:999px;white-space:nowrap;">
-            <i class="icon-check-circle"></i> {l s='Connected' mod='fullmetrixconnector'}
+            <span style="width:9px;height:9px;border-radius:999px;background:#1a8245;"></span>
+            {l s='Connected' mod='fullmetrixconnector'}
         </span>
     </div>
 

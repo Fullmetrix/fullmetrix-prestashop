@@ -16,14 +16,8 @@ $_MODULE['<{fullmetrixconnector}prestashop>connect_5ca69a1c7ac7d9891455d7c8f0206
 $_MODULE['<{fullmetrixconnector}prestashop>connect_49ab28040dfa07f53544970c6d147e1e'] = 'Connecter';
 $_MODULE['<{fullmetrixconnector}prestashop>sync_activity_68ab8083f86626efa8b5d7358678f4b1'] = 'Activité de synchronisation';
 $_MODULE['<{fullmetrixconnector}prestashop>sync_activity_278d2bf6768809fbf6e97e7bb319a7c0'] = 'Synchronisation en cours';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_72f35d0acd2ce03524cbf028c876d553'] = 'Fullmetrix récupère les données de votre boutique. Actualisez cette page pour suivre la progression.';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_8b74d379ecfd3e9dabad9512886f8162'] = 'Dernière synchronisation réussie';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_f3005037868646453ef50a278dcbc304'] = 'Enregistrements envoyés à Fullmetrix lors de la dernière synchronisation :';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_c234a06bf4e444e454dd1c24229f9a74'] = 'Les nouvelles commandes et modifications sont synchronisées automatiquement.';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_8120b5abeb045139af9138a1037bfb7e'] = 'Aucune synchronisation enregistrée pour le moment.';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_753fba56f323d64631087e89eace91ea'] = 'Les synchronisations se lancent depuis votre tableau de bord Fullmetrix, pas depuis cette page. Une fois votre boutique connectée, le premier import démarre automatiquement et les nouvelles commandes sont synchronisées au fil de l\'eau.';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_3bde7181756c34c39438f6711c75ecd7'] = 'Si rien n\'apparaît, vérifiez que cette boutique est accessible publiquement (une boutique renvoyant une page d\'erreur ou en mode maintenance ne peut pas être synchronisée).';
-$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_0f182b6fc3e998d890467e1b2d942702'] = 'requêtes de synchronisation traitées au total';
+$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_e57f4816285d9b4b90e1e66aecb855b9'] = 'Synchronisation terminée';
+$_MODULE['<{fullmetrixconnector}prestashop>sync_activity_74d11ccf9e001a2803a4c6a93e7f83f2'] = 'En attente de synchronisation';
 $_MODULE['<{fullmetrixconnector}prestashop>fullmetrixconnector_e84bb6e7b41579fee5181529feac6ef4'] = '%d h %d min';
 $_MODULE['<{fullmetrixconnector}prestashop>fullmetrixconnector_15ac5fe1a50c3bd58aa884419ee8cc63'] = 'il y a %d h';
 $_MODULE['<{fullmetrixconnector}prestashop>fullmetrixconnector_155c5a88c53b1e7ea69fe2506e32f12c'] = '%d min %d s';
