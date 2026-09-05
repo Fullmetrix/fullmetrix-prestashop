@@ -37,6 +37,9 @@ class FullmetrixStreamExporter
     private static $sensitiveColumns = [
         'passwd', 'secure_key', 'last_passwd_gen',
         'reset_password_token', 'reset_password_validity',
+        // Donnees de carte portees par order_payment: card_brand reste, c'est
+        // le moyen de paiement, le reste ne doit jamais sortir de la boutique.
+        'card_number', 'card_expiration', 'card_holder',
     ];
 
     /**
@@ -375,7 +378,10 @@ class FullmetrixStreamExporter
             // gros catalogue.
             $skip = array_flip($mappedColumns) + array_flip(self::$sensitiveColumns);
             foreach ($row as $key => $value) {
-                if (isset($skip[$key]) || $this->isSensitiveKey($key)) {
+                // Un champ de personnalisation nomme Signature ou Empreinte est
+                // de la donnee metier saisie par le client, jamais un secret.
+                $estPersonnalisation = strpos($key, 'customization_') === 0;
+                if (isset($skip[$key]) || (!$estPersonnalisation && $this->isSensitiveKey($key))) {
                     continue;
                 }
                 if ($value === null || $value === '' || !is_scalar($value)) {
@@ -512,7 +518,7 @@ class FullmetrixStreamExporter
             $rows = $this->db->executeS(
                 'SELECT c.TABLE_NAME AS table_name,
                         MIN(k.COLUMN_NAME) AS pk_column,
-                        GROUP_CONCAT(
+                        GROUP_CONCAT(DISTINCT
                             CASE WHEN c.DATA_TYPE IN (\'blob\', \'mediumblob\', \'longblob\', \'tinyblob\', \'binary\', \'varbinary\')
                                  THEN NULL ELSE c.COLUMN_NAME END
                         ) AS safe_columns,
@@ -523,7 +529,7 @@ class FullmetrixStreamExporter
                         AND k.TABLE_NAME = c.TABLE_NAME
                         AND k.CONSTRAINT_NAME = \'PRIMARY\')
                  WHERE c.TABLE_SCHEMA = DATABASE()
-                   AND c.TABLE_NAME LIKE \'' . pSQL($this->prefix) . '%\'
+                   AND c.TABLE_NAME LIKE \'' . pSQL(str_replace(['_', '%'], ['\\_', '\\%'], $this->prefix)) . '%\'
                    AND EXISTS (
                        SELECT 1 FROM information_schema.COLUMNS f
                        WHERE f.TABLE_SCHEMA = c.TABLE_SCHEMA
