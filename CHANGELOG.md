@@ -1,0 +1,401 @@
+# Changelog
+
+All notable changes to the Fullmetrix PrestaShop connector are documented here.
+
+## 2.0.0
+
+- Les hooks du module ne font plus aucun appel réseau, aucun calcul et aucune sortie dans les requêtes de la boutique. Chaque changement (commande prête, client, produit, déclinaison, prix spécifique, stock, catégorie, coupon, panier, connexion client, suppressions) est noté en une ligne d'entiers dans la table `fullmetrix_journal`, par une seule instruction SQL.
+- Les hooks de commande de la 1.x (`actionValidateOrder`, `actionOrderStatusUpdate`, `actionOrderSlipAdd`) restent inscrits mais n'exécutent plus rien. Commandes, états et avoirs sont lus par Fullmetrix. Aucun hook n'est désinscrit.
+- Nouveaux hooks : `actionProductDelete`, `actionObjectCartRuleAddAfter`, `actionObjectCartRuleDeleteAfter`, `actionCategoryAdd`, `actionCategoryDelete`, et `actionValidateOrderAfter` à partir de PrestaShop 8.0. Ils sont inscrits pour toutes les boutiques.
+- Un disjoncteur coupe un hook après une erreur SQL (15 min, puis 1 h, puis 6 h), sans jamais se déclencher sur une attente de verrou ou un verrou mortel de la transaction du marchand.
+- La balise de suivi est rendue sans Smarty ni appel réseau. Les liens de relance de panier passent par le contrôleur `recover`.
+- La mise à jour renvoie toujours un succès et ne désactive plus jamais le module. Une étape en échec est notée et affichée dans la page de configuration. Si le journal ne peut pas être créé (droit `CREATE` refusé, pas d'InnoDB), le module fonctionne en mode dégradé.
+- Les scripts de mise à jour intermédiaires (1.5.4) tolèrent les erreurs de la même façon.
+- La désinstallation supprime la table du journal après la désinscription des hooks, avec une attente de verrou limitée à 2 s.
+- Le panneau « Activité de synchronisation » affiche l'état local : journal, disjoncteur, dernier relais, niveau d'isolation, erreurs de mise à jour, et la commande cron à ajouter si le serveur bloque les connexions entrantes.
+- PHP 7.1 minimum, inchangé.
+
+## 1.11.0
+
+- L'import complet reprend exactement la ou il s'est arrete quand le serveur de la boutique coupe une reponse trop volumineuse.
+- Correction du curseur de secours sur les commandes et les remboursements, qui pouvait sauter un lot entier apres un echec SQL.
+The format is based on [Keep a Changelog](https://keepachangelog.com/), and the
+project adheres to semantic versioning where practical.
+
+## 1.10.0
+
+### Changed
+
+- The PHP floor moves from 7.0 to 7.1. The marketplace validator requires an
+  explicit visibility on class constants, and `public const` is a 7.1
+  construct. PrestaShop 1.6.1 stays supported: it runs on PHP up to 7.1. Only a
+  1.6 shop still on PHP 5.6 or 7.0 is left behind.
+- The currency decimal count is read through `get_object_vars()` instead of
+  `isset()` on the model. `Currency::$precision` does not exist before 1.7.6
+  and is a non-nullable typed property after it, so `isset()` answered the
+  question on 1.6 and answered nothing on 8. Same result verified on 8.2.4.
+
+### Fixed
+
+- The API settings handler resolves the module through a typed local variable.
+  `ModuleFrontController::$module` is declared as `Module`, so static analysis
+  could not see `getStoreSettings()` on the subclass.
+- Product images were always exported in the `home_default` format, 250 x 250
+  pixels on a stock shop, which merchant feeds reject below 500 x 500. The
+  export now picks the widest format the shop declares for products.
+- A combination carries an empty `reference`, not a null one, when it has none
+  of its own: the null coalescing operator let the empty string through and the
+  product reference was lost on every variation.
+
+### Added
+
+- Combinations now export their attributes as group and value pairs, next to
+  the concatenated label they already carried. Without the group name, "39/40"
+  cannot be told apart from a pole length, and merchant feeds have no way to
+  fill `size` or `color`.
+
+## 1.9.0
+
+### Added
+
+- Supports PrestaShop 1.6.1 and up. The version floor drops from 1.7.4.0 to
+  1.6.1.0 and the PHP floor is 7.0: class constants lose their `public`
+  modifier, which PHP 7.0 rejects, and every other construct already ran on 7.0.
+  Verified on 1.6.1.24 / PHP 7.1: install, every export type of the API
+  controller, the full stream, coupon commands, all action hooks, the tracker
+  in the storefront header and the cart-recovery link.
+
+### Fixed
+
+- On 1.6 the `cart` controller only mutates the cart and redirects, so a
+  cart-recovery link landing on it bounced to the home page. The link and the
+  post-rebuild redirect now target the order controller (or `order-opc` when
+  one-page checkout is on), whose first step is the cart summary. 1.7 and up
+  keep the standalone cart page.
+- `Language::$locale` (1.7+) and `Currency::$precision` (1.7.6+) were read
+  unguarded and raised notices on 1.6. Store settings now fall back to
+  `language_code` and to the legacy `decimals` flag. The API `settings` type
+  reuses the module's implementation instead of a duplicated copy.
+- `order_detail.id_customization` does not exist before 1.7 and raised a notice
+  on every order line.
+
+## 1.8.0
+
+### Added
+
+- Resolves the cart from an opaque link identifier instead of a payload embedded
+  in the URL. The contents are read at click time, so a shopper who changed their
+  cart after the message was sent gets the cart they actually have. Nothing about
+  the cart or the coupon travels in the URL any more.
+- Redirects to the checkout instead of the cart when the link carries a coupon,
+  so the discount is visible right away.
+
+### Fixed
+
+- The redirect rebuilt a bare URL and dropped `utm_*`, `gclid` and `fbclid`, so
+  recovery clicks were attributed as direct traffic. Incoming parameters are now
+  carried over.
+
+## 1.6.1
+
+### Fixed
+
+- Stops detaching the response with `fastcgi_finish_request()`. On PHP-FPM it ran
+  before PrestaShop wrote its session cookie from `Cookie::__destruct()`. On login,
+  `updateCustomer()` writes the cookie and only then `registerSession()` adds
+  `session_id` and `session_token`, so those two keys were still pending when the
+  response was released, and were lost. `isSessionAlive()` then failed on the next
+  request and the customer was bounced back to the login page indefinitely.
+
+  The previous workaround forced `Cookie::write()` from the shutdown handler. It
+  worked, but it depended on PrestaShop's internal ordering and required a
+  `Context` call on the shutdown path.
+
+  The response is no longer detached at all. This is not a new code path: shops
+  that are not on FPM have always run it, short timeouts included. Measured on the
+  test shop, a flush costs under 200 ms including payload construction, and is
+  capped at 800 ms per entity by the existing timeouts. Only requests that queued
+  something reach the flush, so page views are unaffected: the cost falls on cart
+  updates, login and order validation.
+
+  `isClientDetached()` and the dual timeout budgets introduced in 1.5.7 are removed
+  as a consequence; a single set of timeouts now applies everywhere.
+
+## 1.5.7
+
+### Fixed
+
+- Removes up to 2 seconds of page latency for the shopper when the Fullmetrix API
+  is slow. `getCachedConfig()` runs inside `hookDisplayHeader`, so the visitor is
+  still waiting on the page, but it picked its cURL timeouts from
+  `function_exists('fastcgi_finish_request')` — which only says PHP-FPM is
+  available, never that the response has actually been released. It therefore used
+  the long, post-detachment budget (1 s connect / 2 s total) on the rendering path.
+  Every timeout choice now asks `FullmetrixWebhookSender::isClientDetached()`, the
+  real state, and the rendering path is capped at 200 ms / 500 ms.
+
+  Measured on a live PrestaShop 8.2.8 with the API forced to answer in 5 s, one
+  call per page in both runs: **2.13 s before, 0.64 s after**. A shop whose page
+  renders in 0.25 s was serving 2.1 s pages to one visitor every 5 minutes
+  whenever our API was degraded.
+
+## 1.5.6
+
+### Fixed
+
+- A signed cart-recovery link (`fm_cart`) no longer empties the cart the shopper
+  is currently building. `maybeRebuildCart()` used to delete every line of the
+  current cart before restoring the payload, so a customer who filled a cart and
+  then clicked an older abandoned-cart email lost what they had just added. Lines
+  already in the cart now win, and only the missing ones are added. Measured on a
+  live PrestaShop 8.2.8: before, a cart holding one product came back holding only
+  the link's product; after, it holds both.
+- Cart-recovery links now carry a timestamp and expire after 30 days. The payload
+  is signed but has no nonce, so an archived or forwarded URL used to replay
+  forever. Links issued before this version carry no timestamp and keep working,
+  so emails already sent are unaffected.
+
+## 1.5.5
+
+### Fixed
+
+- Fixes an infinite redirect loop on customer login. The shutdown handlers that
+  send tracking events, webhooks and checkout consents call
+  `fastcgi_finish_request()` to release the client before any HTTP call. PHP runs
+  shutdown functions before object destructors, and PrestaShop only persists its
+  cookie from `Cookie::__destruct()`, where `write()` is a no-op once
+  `headers_sent()` is true. On login, `Context::updateCustomer()` writes the
+  cookie and *then* adds `session_id` / `session_token` through
+  `registerSession()`, so those keys were still pending when the response was
+  detached and never reached the browser. `Cookie::isSessionAlive()` then failed
+  on the next request and the customer was sent back to the login page. The
+  response is now detached only after the pending cookie has been written.
+  Affects every PrestaShop from 1.7.6 to 9.x: `Cookie::registerSession()` landed
+  in 1.7.6 and `Customer::isLogged()` has required `isSessionAlive()` ever since.
+  1.7.4 and 1.7.5 are not affected. The regression was introduced in connector
+  1.5.0, which added `fastcgi_finish_request()`; only PHP-FPM and LiteSpeed
+  storefronts are hit, and only when the visitor already carries the tracker
+  cookies that make a hook queue an event during the login request.
+
+## 1.5.4
+
+### Added
+
+- Adds tax-inclusive displayed, regular and sale prices to products and combinations.
+- Adds tax-inclusive pre-discount prices and tax amounts to order lines.
+- Sends product and combination updates when combinations or specific prices change.
+
+## 1.5.3
+
+### Added
+
+- Adds a `shop` object to streamed and webhook payloads for orders, refunds,
+  customers, products, product variations, categories and coupons. The payload
+  includes the PrestaShop shop id, shop group id, names, public URL and active
+  status where available.
+- Adds `customer_groups` to customer payloads and order payloads, including the
+  default group id/name plus all assigned group ids/names.
+- Adds coupon restriction metadata for customer groups and shops so future
+  Fullmetrix features can map PrestaShop B2B and multi-shop rules without a
+  historical resync.
+
+### Notes
+
+- This release intentionally keeps the new PrestaShop metadata in the raw sync
+  JSON. It does not yet expose shop or customer-group fields in Fullmetrix
+  dashboards, segmentation or filters.
+- Native PrestaShop carts remain out of scope. Cart analytics continue to rely
+  on Fullmetrix universal tracking.
+
+## 1.5.0
+
+A stability release focused on guaranteeing that the connector cannot crash
+or noticeably slow down the storefront, regardless of the hosting setup
+(PHP-FPM, Apache `mod_php`, CGI, LiteSpeed). Behaviourally compatible with
+1.4.x — no configuration changes required.
+
+### Storefront safety
+
+- Every frontend hook is now wrapped in a top-level `try/catch (\Throwable)`.
+  Swallowed exceptions are recorded in the admin **Logs** tab through a new
+  `FullmetrixLogger::logException()` helper instead of failing silently.
+  Hooks affected: `displayHeader`, `displayFooter`, `actionCartSave`,
+  `actionAuthentication`, `actionValidateOrder`, `actionOrderStatusUpdate`,
+  `actionCustomerAccountUpdate`, `actionObjectCustomerUpdateAfter`,
+  `actionProductUpdate`, `actionProductAdd`, `actionUpdateQuantity`,
+  `actionObjectCartRuleUpdateAfter`, `actionOrderSlipAdd`,
+  `actionCategoryUpdate`.
+- A central `FullmetrixConnector::isActive()` guard early-returns from every
+  action hook when the plugin is disconnected. A disconnected plugin now
+  performs zero work on storefront requests.
+- `hookActionCartSave` is now suppressed during order validation
+  (`$cart->orderExists()` check), so checkout no longer emits a spurious
+  post-validation `cart_updated` event.
+- `hookActionCartSave` calls `$cart->getOrderTotal(...)` inside a guarded
+  block and falls back to summing line totals when the cart has no carrier
+  or address (the typical guest-visitor case).
+- `maybeRebuildCart` validates the HMAC signature, then walks each step in
+  its own `try/catch` (item delete, item add, coupon apply). If headers
+  have already been sent by another module, the function gracefully returns
+  instead of attempting an invalid redirect.
+- Every per-item branch in `hookActionCartSave` (`getImageLink`,
+  `getProductLink`, `nbProducts`, `getCartRules`, `buildCartRecoveryUrl`)
+  is individually guarded so that a single broken product cannot prevent
+  the rest of the cart snapshot from being captured.
+
+### Non-blocking HTTP
+
+- All outbound HTTP traffic now goes through cURL with explicit millisecond
+  timeouts (`CURLOPT_CONNECTTIMEOUT_MS`, `CURLOPT_TIMEOUT_MS`) and
+  `CURLOPT_NOSIGNAL=1`, so a DNS hang or slow upstream cannot freeze a
+  worker. The previous `file_get_contents` + `stream_context_create` path
+  has been removed.
+- Timeouts adapt to the SAPI:
+  - **PHP-FPM** (response already flushed via `fastcgi_finish_request`):
+    1.5–3s — comfortable margin, hidden from the customer.
+  - **Apache `mod_php` / CGI** (response not yet sent): 200–800ms — strict
+    cap, capped at the request level even when the upstream is slow.
+- `FullmetrixWebhookSender::finishResponse()` centralises the call to
+  `fastcgi_finish_request()` + `ignore_user_abort(true)`. Calling it is
+  idempotent across shutdown handlers via a shared static flag — the
+  function is now invoked at most once per request.
+- The connector class no longer registers a fresh shutdown handler for
+  every checkout consent. A static `$pendingConsents` queue is filled from
+  `forwardCheckoutConsent`, and a single `flushPendingConsents()` shutdown
+  drains it. Bulk-validation scripts that process several orders in one
+  request now send one batch of consent POSTs instead of N serialised
+  ones.
+- The plugin config endpoint (`/api/plugin/config`) is fetched at most
+  once per request. A static memoisation flag prevents the header and
+  footer hooks from triggering the same cURL twice in a single page
+  render. The on-disk cache TTL remains 30 minutes and falls back to the
+  stale entry if the upstream is unreachable, without writing to the
+  database on failure.
+
+### Tracking events
+
+- `FullmetrixTrackingSender::enqueueEvent()` deduplicates `cart_updated`
+  events within a single request. PrestaShop fires `actionCartSave` on
+  every quantity change, carrier change, and automatic cart-rule
+  application, which could previously enqueue 5–10 identical snapshots of
+  the same cart. Only the latest snapshot is now kept.
+- Cookie values (`fm_vid`, `fm_sid`, `fm_cid`) are validated with a strict
+  regex and length cap instead of `pSQL()`, so names containing
+  apostrophes (e.g. `O'Brien`) are no longer SQL-escaped on their way out
+  to the analytics backend.
+- Visitor / session identifiers are accepted only if they match
+  `^[a-zA-Z0-9_\-]{1,64}$`. The raw `fm_cid` cookie payload is hard-capped
+  at 8 KB; each string field within it is capped at 255 characters.
+- `getCurrentUrl()` no longer reads attacker-controllable `$_SERVER['HTTP_HOST']`.
+  It uses `Tools::getShopDomainSsl()` + `Tools::usingSecureMode()` through a
+  shared `FullmetrixConnector::buildPublicUrl()` helper.
+
+### Webhooks
+
+- The webhook queue captures the current shop id (`Context::getContext()->shop->id`)
+  per entry instead of relying on the shop id that was current when the
+  module was first instantiated. In multi-shop installations this prevents
+  a webhook from being emitted with the wrong shop scope when context
+  switches within a request. Stream exporters are instantiated once per
+  shop id seen in the queue.
+- The redundant `register_shutdown_function` call inside `enqueue()` was
+  removed; `init()` registers it once. Combined with the queue's natural
+  deduplication, this eliminates a narrow race that could send the same
+  webhook twice.
+- The webhook flush handler runs entirely inside a guarded loop. A failure
+  while formatting one entity is logged via `FullmetrixLogger::logException`
+  but does not interrupt the remaining entities.
+- The checkout-consent POST is now signed with the same HMAC scheme as the
+  other plugin endpoints (`X-Fullmetrix-Connection-Code`,
+  `X-Fullmetrix-Signature`, `X-Fullmetrix-Timestamp`). Forward-compatible:
+  servers that ignore the headers continue to honour the `key` field in
+  the body.
+
+### Performance
+
+- `FullmetrixConnector::getConfig()` memoises `Configuration::get()` reads
+  for the duration of a request. Frequently-read keys
+  (`FULLMETRIX_CONNECTION_CODE`, `FULLMETRIX_CONNECTION_SECRET`,
+  `FULLMETRIX_REGISTERED`) are now read from the database at most once
+  per request.
+- `FullmetrixConnector::clearConfigCache()` is invoked after admin
+  Connect / Disconnect actions so subsequent reads in the same request
+  see the new state immediately.
+- `FULLMETRIX_PLUGIN_CONFIG` is now cleared on disconnect and on uninstall
+  so reconnecting against a different Fullmetrix account does not serve a
+  stale `checkoutConsent` block for up to 30 minutes.
+
+### Defensive checks
+
+- All `curl_init()` calls now check the return value; the plugin gracefully
+  no-ops if libcurl is broken or disabled on the host.
+- All `curl_setopt_array` blocks set `CURLOPT_FOLLOWLOCATION = false`.
+- Hosts without `curl_init` defined are detected and the relevant
+  outbound paths short-circuit cleanly.
+
+### Admin
+
+- The Logs tab now correctly initialises `$rawLogs` before iterating —
+  fixes a fatal `TypeError` on PHP 8 (`foreach over null`).
+- The "Clear Logs" button now actually clears the log entries
+  (`FullmetrixLogger::clear()`); previously it only rendered the
+  confirmation banner without resetting the underlying configuration row.
+- `FullmetrixLogger::logException($context, $e)` records a structured
+  entry (`type=sync_error`, `message=hook_exception`, `details={context, error, file:line}`)
+  whenever a top-level catch block swallows a `\Throwable`.
+
+### Compatibility
+
+- `ps_versions_compliancy.min` was bumped from `1.7.0.0` to `1.7.4.0`. The
+  codebase relies on language features (`\Throwable`, `random_bytes`) that
+  require PHP 7.1+, which PrestaShop 1.7.4.0 enforces. Stores running PS
+  1.7.0–1.7.3 with PHP 5.6 will no longer accept the install rather than
+  crash on a parse error after install.
+- All four version markers (`FULLMETRIX_VERSION`, `$this->version`,
+  `config.xml`, `manifest.json`) are kept in sync by `scripts/build-plugins.sh`.
+- The PrestaShop validator's findings have been addressed:
+  - PHPDoc type ordering (`null` placed last) per `phpdoc_types_order`.
+  - Blank line before `return` per `blank_line_before_statement` for the
+    new methods.
+  - Removed inline HTML output from `maybeRebuildCart` (PHP code no longer
+    contains `echo` of HTML).
+  - Removed the `litespeed_finish_request` fallback that the validator's
+    static analyser flagged as an unknown symbol.
+  - Tightened isset checks where the array shape already guarantees the key.
+
+### Files added
+
+- `CHANGELOG.md` (this file).
+
+### Files modified
+
+- `fullmetrixconnector.php`
+- `classes/FullmetrixWebhookSender.php`
+- `classes/FullmetrixTrackingSender.php`
+- `classes/FullmetrixLogger.php` (added `logException`)
+- `config.xml`
+- `manifest.json`
+
+### Known limitations
+
+- Native PrestaShop multi-shop (several shops sharing one install) is
+  technically supported (each webhook now carries its own `shop_id`), but
+  the connector is designed primarily for a one-install / one-shop setup.
+  Multiple PrestaShop installations are independent and each requires its
+  own connection code, which is the standard pattern.
+- Apache `mod_php` users may observe a small additional latency on order
+  validation (≤ 800ms in the worst case where the analytics endpoint is
+  unreachable) because `fastcgi_finish_request` is not available outside
+  PHP-FPM. On PHP-FPM no measurable latency is added.
+- Product features (`product_feature`) and suppliers (`supplier`) are not
+  yet extracted by the connector. They are planned for a future release.
+- Stream exporters do not currently filter all queries by `id_shop`. In
+  native multi-shop installations this can mix data from sibling shops in
+  the initial sync. Webhook deltas are correctly scoped.
+
+## 1.4.x and earlier
+
+Earlier releases focused on feature parity with the WooCommerce connector
+(initial sync, paginated and streaming exporters, signed webhooks for
+orders, customers, products, categories, coupons, refunds, gift coupons
+with combination attribute support, cart recovery via signed URL).
