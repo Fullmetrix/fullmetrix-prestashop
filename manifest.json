@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.1",
   "minimumRequired": "1.6.1.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Le module ne fait plus aucun appel réseau ni aucun calcul dans les pages de la boutique. Chaque changement est noté en une ligne dans une table locale, puis lu par Fullmetrix, ou envoyé par la boutique quand Fullmetrix ne peut pas la joindre. La mise à jour ne désactive jamais le module."
+  "changelog": "Le module s'arrête proprement si une requête d'export échoue toujours, n'envoie plus les données privées de la boutique (notes internes, messages, IBAN, numéros d'identité, IP), lit le stock partagé des groupes de boutiques et transmet le code des coupons au lieu de leur nom, et n'accepte plus que la signature v2 des appels de Fullmetrix."
 }

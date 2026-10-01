@@ -2,6 +2,17 @@
 
 All notable changes to the Fullmetrix PrestaShop connector are documented here.
 
+## 2.0.1
+
+- L'export s'arrête après trois échecs consécutifs de sa requête principale, avec une ligne `fatal`, au lieu de relancer la même requête sans fin.
+- Les notes internes du back-office, les messages privés, les paniers, les factures, les retours, les avis, le journal RGPD, les alertes de stock et toute colonne d'IBAN, de numéro d'identité ou d'adresse IP ne sont plus envoyés. La liste est partagée avec Fullmetrix.
+- La lecture des tables liées passe par une jointure et ne tronque plus la liste des colonnes d'une table large.
+- En multiboutique avec stock partagé, le stock exporté est celui du groupe de boutiques.
+- Le panier transmet le code des coupons au lieu de leur nom. Le lien de relance n'applique qu'un code valide et ignore les produits ou déclinaisons non vendables.
+- Les commandes `coupon.update` et `coupon.delete` sont retirées. `coupon.create` refuse les valeurs invalides.
+- La liste des commandes modifiées est paginée par identifiant, sans doublon ni trou.
+- Les appels signés en v1 sont refusés : seule la signature v2 est acceptée, sauf réactivation d'urgence à distance.
+
 ## 2.0.0
 
 - Les hooks du module ne font plus aucun appel réseau, aucun calcul et aucune sortie dans les requêtes de la boutique. Chaque changement (commande prête, client, produit, déclinaison, prix spécifique, stock, catégorie, coupon, panier, connexion client, suppressions) est noté en une ligne d'entiers dans la table `fullmetrix_journal`, par une seule instruction SQL.

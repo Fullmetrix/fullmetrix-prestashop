@@ -116,7 +116,7 @@ class FullmetrixConnectorRecoverModuleFrontController extends ModuleFrontControl
                 if (isset($existingKeys[$productId . '_' . $variationId])) {
                     continue;
                 }
-                if ($productId > 0 && Product::existsInDatabase($productId, 'product')) {
+                if ($productId > 0 && self::purchasable($productId, $variationId, (int) $context->shop->id)) {
                     $cart->updateQty($quantity, $productId, $variationId);
                 }
             } catch (Exception $e) {
@@ -137,8 +137,9 @@ class FullmetrixConnectorRecoverModuleFrontController extends ModuleFrontControl
                         continue;
                     }
                     $cartRuleId = (int) CartRule::getIdByCode($couponCode);
-                    if ($cartRuleId > 0) {
+                    if ($cartRuleId > 0 && self::applicable(new CartRule($cartRuleId), $context)) {
                         $cart->addCartRule($cartRuleId);
+                        break;
                     }
                 } catch (Exception $e) {
                     continue;
@@ -149,6 +150,25 @@ class FullmetrixConnectorRecoverModuleFrontController extends ModuleFrontControl
         }
 
         return isset($data['target']) && $data['target'] === 'checkout' ? 'checkout' : 'cart';
+    }
+
+    private static function purchasable($productId, $variationId, $shopId)
+    {
+        $sql = 'SELECT 1 FROM `' . _DB_PREFIX_ . 'product_shop` ps';
+        if ($variationId > 0) {
+            $sql .= ' JOIN `' . _DB_PREFIX_ . 'product_attribute` pa ON (pa.`id_product` = ps.`id_product` AND pa.`id_product_attribute` = ' . (int) $variationId . ')'
+                . ' JOIN `' . _DB_PREFIX_ . 'product_attribute_shop` pas ON (pas.`id_product_attribute` = pa.`id_product_attribute` AND pas.`id_shop` = ps.`id_shop`)';
+        }
+        $sql .= ' WHERE ps.`id_product` = ' . (int) $productId . ' AND ps.`id_shop` = ' . (int) $shopId
+            . ' AND ps.`active` = 1 AND ps.`available_for_order` = 1';
+
+        return (bool) Db::getInstance()->getValue($sql, false);
+    }
+
+    private static function applicable($cartRule, $context)
+    {
+        return Validate::isLoadedObject($cartRule)
+            && $cartRule->checkValidity($context, false, false, false) === true;
     }
 
     private function redirectTo($target)

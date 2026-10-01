@@ -318,7 +318,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         $raw = Configuration::getGlobalValue('FULLMETRIX_FLAGS');
         $flags = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
 
-        return !is_array($flags) || !array_key_exists('v1', $flags) || $flags['v1'] !== false;
+        return is_array($flags) && array_key_exists('v1', $flags) && $flags['v1'] === true;
     }
 
     private function verifyV2Request()
@@ -370,12 +370,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         switch ($action) {
             case 'coupon.create':
                 $this->commandCouponCreate($payload);
-                break;
-            case 'coupon.update':
-                $this->commandCouponUpdate($payload);
-                break;
-            case 'coupon.delete':
-                $this->commandCouponDelete($payload);
                 break;
             case 'flags.set':
                 $this->commandFlagsSet($payload);
@@ -442,14 +436,26 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
     private function commandCouponCreate($payload)
     {
-        if (empty($payload['code'])) {
+        if (!is_array($payload) || !isset($payload['code']) || !is_string($payload['code']) || !preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $payload['code'])) {
             $this->sendJsonError('Missing coupon code', 400);
 
             return;
         }
+        if (array_key_exists('amount', $payload) && (!is_numeric($payload['amount']) || !is_finite((float) $payload['amount']) || (float) $payload['amount'] < 0)) {
+            $this->sendJsonError('Invalid coupon amount', 400);
+
+            return;
+        }
+        foreach (['usageLimit', 'usageLimitPerUser'] as $limit) {
+            if (array_key_exists($limit, $payload) && (!is_numeric($payload[$limit]) || (int) $payload[$limit] < 1)) {
+                $this->sendJsonError('Invalid ' . $limit, 400);
+
+                return;
+            }
+        }
 
         $cartRule = new CartRule();
-        $cartRule->code = pSQL($payload['code']);
+        $cartRule->code = $payload['code'];
         $cartRule->active = true;
 
         $languages = Language::getLanguages(false);
@@ -475,76 +481,6 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         ]);
     }
 
-    private function commandCouponUpdate($payload)
-    {
-        if (empty($payload['id'])) {
-            $this->sendJsonError('Missing coupon id', 400);
-
-            return;
-        }
-
-        $cartRule = new CartRule((int) $payload['id']);
-        if (!Validate::isLoadedObject($cartRule)) {
-            $this->sendJsonError('Cart rule not found', 404);
-
-            return;
-        }
-
-        if (isset($payload['code'])) {
-            $cartRule->code = pSQL($payload['code']);
-        }
-
-        if (isset($payload['description'])) {
-            $languages = Language::getLanguages(false);
-            foreach ($languages as $lang) {
-                $cartRule->name[$lang['id_lang']] = $payload['description'];
-            }
-        }
-
-        $this->applyCartRuleFields($cartRule, $payload);
-
-        if (!$cartRule->update()) {
-            $this->sendJsonError('Failed to update cart rule', 500);
-
-            return;
-        }
-
-        $this->sendJson([
-            'success' => true,
-            'data' => [
-                'id' => (int) $cartRule->id,
-                'code' => $cartRule->code,
-            ],
-        ]);
-    }
-
-    private function commandCouponDelete($payload)
-    {
-        if (empty($payload['id'])) {
-            $this->sendJsonError('Missing coupon id', 400);
-
-            return;
-        }
-
-        $cartRule = new CartRule((int) $payload['id']);
-        if (!Validate::isLoadedObject($cartRule)) {
-            $this->sendJsonError('Cart rule not found', 404);
-
-            return;
-        }
-
-        if (!$cartRule->delete()) {
-            $this->sendJsonError('Failed to delete cart rule', 500);
-
-            return;
-        }
-
-        $this->sendJson([
-            'success' => true,
-            'data' => ['id' => (int) $payload['id']],
-        ]);
-    }
-
     private function applyCartRuleFields($cartRule, $payload)
     {
         if (isset($payload['discountType'])) {
@@ -567,11 +503,7 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
                     break;
             }
         } elseif (isset($payload['amount'])) {
-            if ($cartRule->reduction_percent > 0) {
-                $cartRule->reduction_percent = min(100, max(0, (float) $payload['amount']));
-            } else {
-                $cartRule->reduction_amount = (float) $payload['amount'];
-            }
+            $cartRule->reduction_amount = (float) $payload['amount'];
         }
 
         if (isset($payload['freeShipping'])) {
@@ -579,11 +511,11 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
         }
 
         if (array_key_exists('usageLimit', $payload)) {
-            $cartRule->quantity = $payload['usageLimit'] === null ? 0 : (int) $payload['usageLimit'];
+            $cartRule->quantity = (int) $payload['usageLimit'];
         }
 
         if (array_key_exists('usageLimitPerUser', $payload)) {
-            $cartRule->quantity_per_user = $payload['usageLimitPerUser'] === null ? 0 : (int) $payload['usageLimitPerUser'];
+            $cartRule->quantity_per_user = (int) $payload['usageLimitPerUser'];
         }
 
         if (array_key_exists('minimumAmount', $payload)) {
@@ -593,21 +525,19 @@ class FullmetrixConnectorApiModuleFrontController extends ModuleFrontController
 
         if (array_key_exists('startsAt', $payload)) {
             $cartRule->date_from = $payload['startsAt'] ? date('Y-m-d H:i:s', strtotime($payload['startsAt'])) : date('Y-m-d H:i:s');
-        } elseif (!$cartRule->id) {
+        } else {
             $cartRule->date_from = date('Y-m-d H:i:s');
         }
 
         if (array_key_exists('expiresAt', $payload)) {
             $cartRule->date_to = $payload['expiresAt'] ? date('Y-m-d H:i:s', strtotime($payload['expiresAt'])) : '0000-00-00 00:00:00';
-        } elseif (!$cartRule->id) {
+        } else {
             $cartRule->date_to = date('Y-m-d H:i:s', strtotime('+1 year'));
         }
 
-        if (!$cartRule->id) {
-            $cartRule->id_customer = 0;
-        }
+        $cartRule->id_customer = 0;
 
-        if (isset($payload['emailRestrictions']) && is_array($payload['emailRestrictions']) && !empty($payload['emailRestrictions'])) {
+        if (isset($payload['emailRestrictions'][0]) && is_array($payload['emailRestrictions']) && is_string($payload['emailRestrictions'][0])) {
             $email = trim($payload['emailRestrictions'][0]);
             if (!empty($email)) {
                 $idCustomer = (int) Db::getInstance()->getValue(

@@ -22,7 +22,7 @@ class FullmetrixSignature
     public const HEADER_SIGNATURE = 'X-Fullmetrix-Signature';
     public const HEADER_BODY_SIGNATURE = 'X-Fullmetrix-Body-Signature';
 
-    private static $excludedParams = ['fc', 'module', 'controller', 'isolang', 'id_lang'];
+    private static $excludedParams = ['fc', 'module', 'controller', 'isolang', 'id_lang', 'rest_route'];
 
     public static function rawQueryString()
     {

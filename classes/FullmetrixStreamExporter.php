@@ -24,9 +24,15 @@ class FullmetrixStreamExporter
     private $relatedTablesCache = [];
     private $sensitiveKeyCache = [];
     private $shopContextCache = [];
+    private $stockShopCondition;
     private $streaming = false;
+    private $streamAborted = false;
 
     public const RELATED_TABLES_TTL = 86400;
+
+    public const RELATED_TABLES_FORMAT = 2;
+
+    public const MAX_CONSECUTIVE_QUERY_FAILURES = 3;
 
     public const META_VALUE_MAX_LENGTH = 20000;
 
@@ -57,6 +63,26 @@ class FullmetrixStreamExporter
         'jeton', 'mot_de_passe', 'motdepasse', 'cle_api', 'cle_secrete',
         'cle_privee', 'empreinte', 'signature',
     ];
+
+    private static $privateRelatedTables = [
+        'cart', 'customer_thread', 'mailalert_customer_oos', 'message',
+        'order_invoice', 'order_invoice_payment', 'order_return',
+        'product_comment', 'psgdpr_log', 'referralprogram',
+    ];
+
+    private static $privateMetaKeys = [
+        'note', 'ip_registration_newsletter', 'gift_message', 'billing_other', 'shipping_other',
+    ];
+
+    private static $privateMetaWords = [
+        'iban', 'bic', 'swift', 'swiftcode', 'rib', 'dni', 'nif', 'nie', 'nir', 'nss', 'ssn', 'cpf',
+        'passport', 'passeport', 'cvv', 'cvv2', 'cvc', 'cryptogramme',
+        'ip', 'ipv4', 'ipv6', 'ipaddress', 'ipaddr',
+    ];
+
+    private static $keptMetaPrefixes = ['customization_', 'cart_rule_'];
+
+    private static $privateMetaKeyCache = [];
 
     private static $orderMappedColumns = [
         'id_order', 'reference', 'id_customer', 'id_currency',
@@ -147,7 +173,7 @@ class FullmetrixStreamExporter
             return (string) FullmetrixConnector::pluginVersion();
         }
 
-        return '2.0.0';
+        return '2.0.1';
     }
 
     /**
@@ -229,10 +255,7 @@ class FullmetrixStreamExporter
                     break;
             }
         } catch (Throwable $e) {
-            $this->sendLine([
-                'type' => 'error',
-                'message' => 'An error occurred while streaming ' . $entity . '.',
-            ]);
+            $this->endAbortedStream($entity);
         }
 
         $this->sendLine([
@@ -263,14 +286,19 @@ class FullmetrixStreamExporter
             'shop' => $this->getShopContext(),
         ]);
 
-        $counts = [
-            'orders' => $this->streamOrdersFast($syncType, $since),
-            'refunds' => $this->streamRefundsFast($syncType, $since),
-            'customers' => $this->streamCustomersFast($syncType, $since),
-            'products' => $this->streamProductsFast($syncType, $since),
-            'categories' => $this->streamCategoriesFast($syncType, $since),
-            'coupons' => $this->streamCouponsFast($syncType, $since),
-        ];
+        $counts = [];
+        try {
+            $counts = [
+                'orders' => $this->streamOrdersFast($syncType, $since),
+                'refunds' => $this->streamRefundsFast($syncType, $since),
+                'customers' => $this->streamCustomersFast($syncType, $since),
+                'products' => $this->streamProductsFast($syncType, $since),
+                'categories' => $this->streamCategoriesFast($syncType, $since),
+                'coupons' => $this->streamCouponsFast($syncType, $since),
+            ];
+        } catch (Throwable $e) {
+            $this->endAbortedStream(null);
+        }
 
         $this->sendLine([
             'type' => 'done',
@@ -301,7 +329,12 @@ class FullmetrixStreamExporter
             'shop' => $this->getShopContext(),
         ]);
 
-        $count = $this->streamOrdersFast($syncType, $since);
+        $count = 0;
+        try {
+            $count = $this->streamOrdersFast($syncType, $since);
+        } catch (Throwable $e) {
+            $this->endAbortedStream('orders');
+        }
 
         $this->sendLine([
             'type' => 'done',
@@ -387,6 +420,11 @@ class FullmetrixStreamExporter
                 if (isset($skip[$key]) || (!$estPersonnalisation && $this->isSensitiveKey($key))) {
                     continue;
                 }
+                $fullKey = $prefix . $key;
+                $prefixedKey = $this->truncateUtf8($fullKey, self::META_KEY_MAX_LENGTH);
+                if (self::isPrivateMetaKey($fullKey) || self::isPrivateMetaKey($prefixedKey)) {
+                    continue;
+                }
                 if ($value === null || $value === '' || !is_scalar($value)) {
                     continue;
                 }
@@ -402,7 +440,6 @@ class FullmetrixStreamExporter
                 if (preg_match('/[\x80-\xFF]/', $text) === 1 && preg_match('//u', $text) !== 1) {
                     continue;
                 }
-                $prefixedKey = $this->truncateUtf8($prefix . $key, self::META_KEY_MAX_LENGTH);
                 if (strlen($text) <= self::META_SHORT_VALUE_LENGTH) {
                     $short[] = ['key' => $prefixedKey, 'value' => $text];
                     continue;
@@ -452,6 +489,48 @@ class FullmetrixStreamExporter
         }
 
         return $this->sensitiveKeyCache[$key] = $sensible;
+    }
+
+    public static function isPrivateMetaKey($key)
+    {
+        $key = (string) $key;
+        if (isset(self::$privateMetaKeyCache[$key])) {
+            return self::$privateMetaKeyCache[$key];
+        }
+
+        return self::$privateMetaKeyCache[$key] = self::privateMetaKey($key);
+    }
+
+    private static function privateMetaKey($key)
+    {
+        foreach (self::$keptMetaPrefixes as $kept) {
+            if (strpos($key, $kept) === 0) {
+                return false;
+            }
+        }
+        $lower = strtolower($key);
+        if (in_array($lower, self::$privateMetaKeys, true)) {
+            return true;
+        }
+        foreach (self::$privateRelatedTables as $table) {
+            if (strpos($lower, $table . '_') === 0) {
+                return true;
+            }
+        }
+
+        return self::hasPrivateMetaWord($key);
+    }
+
+    private static function hasPrivateMetaWord($name)
+    {
+        $words = preg_split('/[^a-z0-9]+/', strtolower((string) preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', (string) $name)));
+
+        return is_array($words) && count(array_intersect($words, self::$privateMetaWords)) > 0;
+    }
+
+    private static function isPrivateRelatedTable($shortName)
+    {
+        return in_array($shortName, self::$privateRelatedTables, true) || self::hasPrivateMetaWord($shortName);
     }
 
     private function truncateUtf8($text, $maxBytes)
@@ -528,10 +607,6 @@ class FullmetrixStreamExporter
             $rows = $this->db->executeS(
                 'SELECT c.TABLE_NAME AS table_name,
                         MIN(k.COLUMN_NAME) AS pk_column,
-                        GROUP_CONCAT(DISTINCT
-                            CASE WHEN c.DATA_TYPE IN (\'blob\', \'mediumblob\', \'longblob\', \'tinyblob\', \'binary\', \'varbinary\')
-                                 THEN NULL ELSE c.COLUMN_NAME END
-                        ) AS safe_columns,
                         COUNT(*) AS column_count
                  FROM information_schema.COLUMNS c
                  LEFT JOIN information_schema.KEY_COLUMN_USAGE k
@@ -552,14 +627,15 @@ class FullmetrixStreamExporter
                  ORDER BY c.TABLE_NAME
                  LIMIT ' . (int) self::MAX_RELATED_TABLES
             );
-            if (is_array($rows)) {
-                foreach ($rows as $row) {
-                    $tables[(string) $row['table_name']] = [
-                        'pk' => (string) ($row['pk_column'] ?? ''),
-                        'columns' => array_values(array_filter(explode(',', (string) ($row['safe_columns'] ?? '')))),
-                    ];
+            $kept = [];
+            foreach (is_array($rows) ? $rows : [] as $row) {
+                $table = (string) $row['table_name'];
+                if (self::isPrivateRelatedTable(substr($table, strlen($this->prefix)))) {
+                    continue;
                 }
+                $kept[$table] = (string) ($row['pk_column'] ?? '');
             }
+            $tables = $this->loadRelatedColumns($fkColumn, $kept);
             $this->writeRelatedTablesCache($fkColumn, $tables);
         } catch (Throwable $e) {
             // An information_schema restricted by hosting must not break the sync.
@@ -571,13 +647,79 @@ class FullmetrixStreamExporter
         return $tables;
     }
 
+    private function loadRelatedColumns($fkColumn, array $kept)
+    {
+        if (empty($kept)) {
+            return [];
+        }
+        $rows = $this->db->executeS(
+            'SELECT c.TABLE_NAME AS table_name, c.COLUMN_NAME AS column_name,
+                    CASE WHEN c.DATA_TYPE IN (\'blob\', \'mediumblob\', \'longblob\', \'tinyblob\', \'binary\', \'varbinary\')
+                         THEN 0 ELSE 1 END AS readable,
+                    k.ORDINAL_POSITION AS pk_position
+             FROM information_schema.COLUMNS c
+             LEFT JOIN information_schema.KEY_COLUMN_USAGE k
+                    ON (k.TABLE_SCHEMA = c.TABLE_SCHEMA
+                    AND k.TABLE_NAME = c.TABLE_NAME
+                    AND k.COLUMN_NAME = c.COLUMN_NAME
+                    AND k.CONSTRAINT_NAME = \'PRIMARY\')
+             WHERE c.TABLE_SCHEMA = DATABASE()
+               AND c.TABLE_NAME IN (\'' . implode('\',\'', array_map('pSQL', array_keys($kept))) . '\')
+             ORDER BY c.TABLE_NAME, c.COLUMN_NAME'
+        );
+        $columns = [];
+        $keys = [];
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $table = (string) $row['table_name'];
+            $column = (string) $row['column_name'];
+            if ((int) $row['readable'] === 1) {
+                $columns[$table][] = $column;
+            }
+            if ($row['pk_position'] !== null && $row['pk_position'] !== '') {
+                $keys[$table][(int) $row['pk_position']] = $column;
+            }
+        }
+
+        $tables = [];
+        foreach ($kept as $table => $pkColumn) {
+            if (!isset($columns[$table]) || !in_array($fkColumn, $columns[$table], true)) {
+                continue;
+            }
+            $order = isset($keys[$table]) ? $keys[$table] : [];
+            ksort($order);
+            $tables[$table] = [
+                'pk' => $pkColumn,
+                'columns' => $columns[$table],
+                'order' => array_values($order),
+            ];
+        }
+
+        return $tables;
+    }
+
+    private static function relatedTablesSignature()
+    {
+        return md5((string) json_encode([
+            self::RELATED_TABLES_FORMAT,
+            self::MAX_RELATED_TABLES,
+            self::$relatedTableDenylist,
+            self::$privateRelatedTables,
+            self::$privateMetaKeys,
+            self::$privateMetaWords,
+            self::$keptMetaPrefixes,
+            self::$sensitiveKeyPatterns,
+            self::$sensitiveColumns,
+        ]));
+    }
+
     private function readRelatedTablesCache($fkColumn)
     {
         try {
             $raw = Configuration::getGlobalValue('FULLMETRIX_RELATED_TABLES');
             $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
-            if (!is_array($decoded) || !isset($decoded[$fkColumn]['t'], $decoded[$fkColumn]['tables'])
+            if (!is_array($decoded) || !isset($decoded[$fkColumn]['t'], $decoded[$fkColumn]['tables'], $decoded[$fkColumn]['v'])
                 || !is_array($decoded[$fkColumn]['tables'])
+                || $decoded[$fkColumn]['v'] !== self::relatedTablesSignature()
                 || time() - (int) $decoded[$fkColumn]['t'] > self::RELATED_TABLES_TTL) {
                 return null;
             }
@@ -596,7 +738,7 @@ class FullmetrixStreamExporter
             if (!is_array($decoded)) {
                 $decoded = [];
             }
-            $decoded[$fkColumn] = ['t' => time(), 'tables' => $tables];
+            $decoded[$fkColumn] = ['v' => self::relatedTablesSignature(), 't' => time(), 'tables' => $tables];
             $encoded = json_encode($decoded);
             if (is_string($encoded)) {
                 Configuration::updateGlobalValue('FULLMETRIX_RELATED_TABLES', $encoded, true);
@@ -620,6 +762,7 @@ class FullmetrixStreamExporter
         }
 
         $groups = [];
+        $fk = '`' . bqSQL($fkColumn) . '`';
         foreach ($this->detectRelatedTables($fkColumn) as $table => $meta) {
             $pkColumn = $meta['pk'];
             if (empty($meta['columns'])) {
@@ -628,19 +771,20 @@ class FullmetrixStreamExporter
             // Colonnes listees explicitement: une colonne binaire, un PDF de
             // facture stocke par un module par exemple, serait lue en memoire
             // pour chaque ligne avant d'etre ecartee.
-            $select = '`' . implode('`, `', array_map('bqSQL', $meta['columns'])) . '`';
+            $select = 'fm_row.`' . implode('`, fm_row.`', array_map('bqSQL', $meta['columns'])) . '`';
             $shortName = substr($table, strlen($this->prefix));
-            $where = bqSQL($fkColumn) . ' IN (' . $idsList . ')';
+            $from = '`' . bqSQL($table) . '` fm_row';
             if ($pkColumn !== '' && $pkColumn !== $fkColumn) {
-                // Une seule ligne par entite, la derniere, decidee par le moteur.
-                $where = '(' . bqSQL($fkColumn) . ', ' . bqSQL($pkColumn) . ') IN ('
-                    . 'SELECT ' . bqSQL($fkColumn) . ', MAX(' . bqSQL($pkColumn) . ')'
+                $pk = '`' . bqSQL($pkColumn) . '`';
+                $from .= ' INNER JOIN (SELECT ' . $fk . ' AS fm_fk, MAX(' . $pk . ') AS fm_pk'
                     . ' FROM `' . bqSQL($table) . '`'
-                    . ' WHERE ' . bqSQL($fkColumn) . ' IN (' . $idsList . ')'
-                    . ' GROUP BY ' . bqSQL($fkColumn) . ')';
+                    . ' WHERE ' . $fk . ' IN (' . $idsList . ')'
+                    . ' GROUP BY ' . $fk . ') fm_last'
+                    . ' ON (fm_row.' . $fk . ' = fm_last.fm_fk AND fm_row.' . $pk . ' = fm_last.fm_pk)';
             }
+            $order = empty($meta['order']) ? '' : ' ORDER BY fm_row.`' . implode('`, fm_row.`', array_map('bqSQL', $meta['order'])) . '`';
             $rows = $this->safeQuery(
-                'SELECT ' . $select . ' FROM `' . bqSQL($table) . '` WHERE ' . $where,
+                'SELECT ' . $select . ' FROM ' . $from . ' WHERE fm_row.' . $fk . ' IN (' . $idsList . ')' . $order,
                 'related_' . $shortName
             );
             if (!is_array($rows)) {
@@ -675,12 +819,44 @@ class FullmetrixStreamExporter
         return $metaData;
     }
 
-    private function streamOrdersFast($syncType, $since, $fromId = 0)
+    private function endAbortedStream($entity)
     {
-        return $this->streamRows('orders', 'orders', 'id_order', 'o', 'date_upd', 'orderSelect', 'orderLines', $syncType, $since, $fromId);
+        if (!$this->streamAborted) {
+            $this->sendLine([
+                'type' => 'fatal',
+                'entity' => $entity,
+                'reason' => 'exception',
+            ]);
+        }
+
+        exit;
     }
 
-    private function streamRows($entity, $table, $idColumn, $alias, $dateColumn, $select, $format, $syncType, $since, $fromId)
+    private function abortStream($entity, $lastId, $count)
+    {
+        $this->streamAborted = true;
+        $this->sendLine([
+            'type' => 'fatal',
+            'entity' => $entity,
+            'reason' => 'query_failed',
+            'last_id' => (int) $lastId,
+            'sent' => (int) $count,
+        ]);
+
+        throw new RuntimeException('Stream aborted: ' . $entity);
+    }
+
+    protected function pauseAfterFailure($failures)
+    {
+        sleep(2 * (int) $failures);
+    }
+
+    private function streamOrdersFast($syncType, $since, $fromId = 0)
+    {
+        return $this->streamRows('orders', 'id_order', 'o', 'date_upd', 'orderSelect', 'orderLines', $syncType, $since, $fromId);
+    }
+
+    private function streamRows($entity, $idColumn, $alias, $dateColumn, $select, $format, $syncType, $since, $fromId)
     {
         $count = 0;
         $lastId = (int) $fromId;
@@ -689,6 +865,7 @@ class FullmetrixStreamExporter
             $sinceWhere = ' AND ' . $alias . '.' . $dateColumn . ' > \'' . pSQL($since) . '\'';
         }
 
+        $failures = 0;
         while (true) {
             $rows = $this->safeQuery(
                 $this->$select($alias . '.' . $idColumn . ' > ' . (int) $lastId . $sinceWhere)
@@ -696,9 +873,17 @@ class FullmetrixStreamExporter
                 $entity
             );
             if ($rows === false) {
-                $lastId = $this->findNextId($table, $idColumn, $lastId, str_replace($alias . '.' . $dateColumn, $dateColumn, $sinceWhere));
+                ++$failures;
+                if ($failures >= self::MAX_CONSECUTIVE_QUERY_FAILURES) {
+                    $this->abortStream($entity, $lastId, $count);
+                }
+                if ($this->batchSize > 100) {
+                    $this->batchSize = max(100, (int) ($this->batchSize / 2));
+                }
+                $this->pauseAfterFailure($failures);
                 continue;
             }
+            $failures = 0;
             if (empty($rows)) {
                 break;
             }
@@ -1075,7 +1260,7 @@ class FullmetrixStreamExporter
 
     private function streamRefundsFast($syncType = 'full', $since = null, $fromId = 0)
     {
-        return $this->streamRows('refunds', 'order_slip', 'id_order_slip', 'os', 'date_add', 'refundSelect', 'refundLines', $syncType, $since, $fromId);
+        return $this->streamRows('refunds', 'id_order_slip', 'os', 'date_add', 'refundSelect', 'refundLines', $syncType, $since, $fromId);
     }
 
     private function refundSelect($where)
@@ -1150,7 +1335,7 @@ class FullmetrixStreamExporter
 
     private function streamCustomersFast($syncType = 'full', $since = null, $fromId = 0)
     {
-        return $this->streamRows('customers', 'customer', 'id_customer', 'c', 'date_upd', 'customerSelect', 'customerLines', $syncType, $since, $fromId);
+        return $this->streamRows('customers', 'id_customer', 'c', 'date_upd', 'customerSelect', 'customerLines', $syncType, $since, $fromId);
     }
 
     private function customerSelect($where)
@@ -1286,7 +1471,7 @@ class FullmetrixStreamExporter
 
     private function streamProductsFast($syncType = 'full', $since = null, $fromId = 0)
     {
-        return $this->streamRows('products', 'product', 'id_product', 'p', 'date_upd', 'productSelect', 'productLines', $syncType, $since, $fromId);
+        return $this->streamRows('products', 'id_product', 'p', 'date_upd', 'productSelect', 'productLines', $syncType, $since, $fromId);
     }
 
     private function productSelect($where)
@@ -1300,10 +1485,34 @@ class FullmetrixStreamExporter
             LEFT JOIN ' . $this->prefix . 'product_lang pl
                 ON (p.id_product = pl.id_product AND pl.id_lang = ' . $this->idLang . ' AND pl.id_shop = ' . $this->idShop . ')
             LEFT JOIN ' . $this->prefix . 'stock_available sa
-                ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND sa.id_shop = ' . $this->idShop . ')
+                ON (p.id_product = sa.id_product AND sa.id_product_attribute = 0 AND ' . $this->stockShopCondition() . ')
             LEFT JOIN ' . $this->prefix . 'manufacturer m ON (p.id_manufacturer = m.id_manufacturer)
             LEFT JOIN ' . $this->prefix . 'supplier s ON (p.id_supplier = s.id_supplier)
             WHERE ' . $where;
+    }
+
+    private function stockShopCondition()
+    {
+        if ($this->stockShopCondition !== null) {
+            return $this->stockShopCondition;
+        }
+        $condition = 'sa.id_shop = ' . (int) $this->idShop;
+        try {
+            $group = $this->db->getRow('SELECT sg.id_shop_group, sg.share_stock
+                FROM ' . $this->prefix . 'shop s
+                INNER JOIN ' . $this->prefix . 'shop_group sg ON (s.id_shop_group = sg.id_shop_group)
+                WHERE s.id_shop = ' . (int) $this->idShop);
+        } catch (Throwable $e) {
+            return $condition;
+        }
+        if (!is_array($group)) {
+            return $condition;
+        }
+        if (!empty($group['share_stock']) && (int) $group['id_shop_group'] > 0) {
+            $condition = 'sa.id_shop_group = ' . (int) $group['id_shop_group'] . ' AND sa.id_shop = 0';
+        }
+
+        return $this->stockShopCondition = $condition;
     }
 
     private function productLines(array $rows, $attributeIds = null)
@@ -1700,7 +1909,7 @@ class FullmetrixStreamExporter
                    GROUP_CONCAT(DISTINCT al.name ORDER BY al.name SEPARATOR \', \') AS attributes
             FROM ' . $this->prefix . 'product_attribute pa
             LEFT JOIN ' . $this->prefix . 'stock_available sa
-                ON (pa.id_product_attribute = sa.id_product_attribute AND sa.id_shop = ' . $this->idShop . ')
+                ON (pa.id_product_attribute = sa.id_product_attribute AND ' . $this->stockShopCondition() . ')
             LEFT JOIN ' . $this->prefix . 'product_attribute_combination pac
                 ON pa.id_product_attribute = pac.id_product_attribute
             LEFT JOIN ' . $this->prefix . 'attribute_lang al
@@ -1769,7 +1978,7 @@ class FullmetrixStreamExporter
 
     private function streamCategoriesFast($syncType = 'full', $since = null, $fromId = 0)
     {
-        return $this->streamRows('categories', 'category', 'id_category', 'c', 'date_upd', 'categorySelect', 'categoryLines', $syncType, $since, $fromId);
+        return $this->streamRows('categories', 'id_category', 'c', 'date_upd', 'categorySelect', 'categoryLines', $syncType, $since, $fromId);
     }
 
     private function categorySelect($where)
@@ -1825,7 +2034,7 @@ class FullmetrixStreamExporter
     }
     private function streamCouponsFast($syncType = 'full', $since = null, $fromId = 0)
     {
-        return $this->streamRows('coupons', 'cart_rule', 'id_cart_rule', 'cr', 'date_upd', 'couponSelect', 'couponLines', $syncType, $since, $fromId);
+        return $this->streamRows('coupons', 'id_cart_rule', 'cr', 'date_upd', 'couponSelect', 'couponLines', $syncType, $since, $fromId);
     }
 
     private function couponSelect($where)
@@ -2163,26 +2372,6 @@ class FullmetrixStreamExporter
 
         echo $json . "\n";
         flush();
-    }
-
-    /**
-     * Find the next valid ID after a failed query to avoid skipping data.
-     * Uses a lightweight MIN() query instead of blind $lastId += batchSize.
-     */
-    private function findNextId($table, $idColumn, $afterId, $extraWhere = '')
-    {
-        $sql = 'SELECT MIN(' . $idColumn . ') AS next_id FROM ' . $this->prefix . $table
-            . ' WHERE ' . $idColumn . ' > ' . (int) $afterId . $extraWhere;
-        try {
-            $row = $this->db->getRow($sql);
-            if ($row && $row['next_id'] !== null) {
-                return (int) $row['next_id'] - 1; // -1 because queries use > lastId
-            }
-        } catch (Throwable $e) {
-            // fallback
-        }
-
-        return $afterId + $this->batchSize;
     }
 
     private $gcCounter = 0;

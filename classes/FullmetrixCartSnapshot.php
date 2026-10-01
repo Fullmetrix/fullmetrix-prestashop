@@ -279,8 +279,8 @@ class FullmetrixCartSnapshot
             $rules = $cart->getCartRules(CartRule::FILTER_ACTION_ALL, false);
             if (is_array($rules)) {
                 foreach ($rules as $rule) {
-                    if (isset($rule['name'])) {
-                        $codes[] = $rule['name'];
+                    if (isset($rule['code']) && is_string($rule['code']) && trim($rule['code']) !== '') {
+                        $codes[] = $rule['code'];
                     }
                 }
             }

@@ -636,7 +636,7 @@ class FullmetrixFastExporter
                     SELECT id_order as id, UNIX_TIMESTAMP(date_upd) as last_updated
                     FROM {$this->prefix}orders
                     WHERE date_upd > '{$from}'
-                    ORDER BY date_upd DESC
+                    ORDER BY id_order
                     LIMIT {$limit} OFFSET {$offset}
                 ";
                 break;
@@ -645,7 +645,7 @@ class FullmetrixFastExporter
                     SELECT id_product as id, UNIX_TIMESTAMP(date_upd) as last_updated
                     FROM {$this->prefix}product
                     WHERE date_upd > '{$from}'
-                    ORDER BY date_upd DESC
+                    ORDER BY id_product
                     LIMIT {$limit} OFFSET {$offset}
                 ";
                 break;
@@ -654,7 +654,7 @@ class FullmetrixFastExporter
                     SELECT id_customer as id, UNIX_TIMESTAMP(date_upd) as last_updated
                     FROM {$this->prefix}customer
                     WHERE date_upd > '{$from}' AND deleted = 0
-                    ORDER BY date_upd DESC
+                    ORDER BY id_customer
                     LIMIT {$limit} OFFSET {$offset}
                 ";
                 break;
