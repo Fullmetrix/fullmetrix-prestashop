@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixConnector extends Module
 {
-    private static $pluginVersion = '2.0.1';
+    private static $pluginVersion = '2.1.0';
     private static $pluginChannel = 'community';
     private static $apiBase = 'https://fullmetrix.com/api/plugin';
     private static $guardFailed = false;
@@ -21,7 +21,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '2.0.1';
+        $this->version = '2.1.0';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -331,6 +331,16 @@ class FullmetrixConnector extends Module
         }
         if (!$dropped) {
             $this->_confirmations[] = $this->l('The Fullmetrix journal table is in use and was kept. It is inert and can be dropped later.');
+        }
+        try {
+            if (is_file(__DIR__ . '/classes/FullmetrixTrackerBundle.php')) {
+                require_once __DIR__ . '/classes/FullmetrixTrackerBundle.php';
+                FullmetrixTrackerBundle::purge();
+            }
+        } catch (Exception $e) {
+            $this->recordUpgradeError('uninstall_tracker', $e->getMessage());
+        } catch (Throwable $e) {
+            $this->recordUpgradeError('uninstall_tracker', $e->getMessage());
         }
         $this->adminDeleteAllConfiguration();
 

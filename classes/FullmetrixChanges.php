@@ -42,7 +42,7 @@ class FullmetrixChanges
     public const UPDATED_MYISAM_EVERY_S = 1800;
     public const CFG_UPDATED_AT = 'FULLMETRIX_UPDATED_AT';
 
-    private static $flagKeys = ['module', 'journal', 'tracker', 'session', 'recover', 'relay', 'relayBo', 'sessionSignals', 'v1'];
+    private static $flagKeys = ['module', 'journal', 'tracker', 'session', 'recover', 'relay', 'relayBo', 'sessionSignals', 'v1', 'trackerLocal', 'keeper'];
     private static $itemTypes = ['order', 'refund', 'customer', 'product', 'product_family', 'variant', 'category', 'coupon'];
     private static $exporters = [];
     private static $enteredShop;

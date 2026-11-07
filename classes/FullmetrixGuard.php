@@ -16,6 +16,12 @@ class FullmetrixGuard
     private static $windowSeconds = 60;
     private static $sleepAfter = 21600;
     private static $defaultOrigin = 'https://fullmetrix.com';
+    private static $ownOrigin = '#^https://([a-z0-9-]+\\.)?fullmetrix\\.com$#';
+    private static $localScriptMaxAge = 172800;
+    private static $localScriptSkew = 300;
+    private static $keeperDefaultDays = 390;
+    private static $keeperMaxDays = 390;
+    private static $tagAttributeNames = ['type', 'data-cookieconsent', 'data-category', 'data-cookiescript', 'data-cmp-ab'];
     private static $benignErrors = [1205, 1213];
     private static $windowStart = 0;
     private static $bootAt = 0;
@@ -97,6 +103,73 @@ class FullmetrixGuard
         }
 
         return self::connected();
+    }
+
+    public static function trackerOrigin()
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return '';
+        }
+
+        return self::origin();
+    }
+
+    public static function isOwnOrigin($origin)
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return false;
+        }
+
+        return is_string($origin) && preg_match(self::$ownOrigin, $origin) === 1;
+    }
+
+    public static function keeperDays()
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return 0;
+        }
+
+        return self::keeper();
+    }
+
+    public static function keeperPath()
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return '';
+        }
+
+        return self::base() . 'index.php?fc=module&module=fullmetrixconnector&controller=keep';
+    }
+
+    public static function normalizeKeeper($keeper)
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return null;
+        }
+        if (!is_array($keeper) || !isset($keeper['enabled']) || !is_bool($keeper['enabled'])) {
+            return null;
+        }
+        $days = self::$keeperDefaultDays;
+        if (isset($keeper['maxAgeDays']) && is_int($keeper['maxAgeDays'])) {
+            $days = $keeper['maxAgeDays'];
+        }
+        if ($days < 1) {
+            $days = 1;
+        }
+        if ($days > self::$keeperMaxDays) {
+            $days = self::$keeperMaxDays;
+        }
+
+        return ['enabled' => $keeper['enabled'], 'days' => $days];
+    }
+
+    public static function normalizeTagAttributes($values)
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return [];
+        }
+
+        return self::cleanTagAttributes($values);
     }
 
     public static function trip($hook, $code)
@@ -467,14 +540,97 @@ class FullmetrixGuard
             $attributes['data-fm-signals'] = '0';
         }
         $json = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
-        $html = '<script>(function(){try{var a=' . json_encode($attributes, $json) . ',u=' . json_encode(self::origin() . '/t.js?v=' . $version, $json)
-            . ';function l(){try{var s=document.createElement("script"),k;s.async=true;s.src=u;for(k in a){if(Object.prototype.hasOwnProperty.call(a,k)){s.setAttribute(k,a[k])}}'
-            . '(document.head||document.documentElement).appendChild(s)}catch(e){}}if(document.readyState==="complete"){l()}else{window.addEventListener("load",l)}}catch(e){}})();</script>';
+        $origin = self::origin();
+        $remote = $origin . '/t.js?v=' . $version;
+        $local = self::localScript($code, $version, $origin, $base);
+        $extra = self::cleanTagAttributes(self::stored('tracker_tag'));
+        if (self::keeper() > 0) {
+            $extra = ['data-fm-keeper' => self::keeperPath()] + $extra;
+        }
+        if ($local === '') {
+            $attributes = $attributes + $extra;
+            $html = '<script>(function(){try{var a=' . json_encode($attributes, $json) . ',u=' . json_encode($remote, $json)
+                . ';function l(){try{var s=document.createElement("script"),k;s.async=true;s.src=u;for(k in a){if(Object.prototype.hasOwnProperty.call(a,k)){s.setAttribute(k,a[k])}}'
+                . '(document.head||document.documentElement).appendChild(s)}catch(e){}}if(document.readyState==="complete"){l()}else{window.addEventListener("load",l)}}catch(e){}})();</script>';
+        } else {
+            if (!preg_match('/^1\\.6\\./', (string) _PS_VERSION_)) {
+                $attributes['data-platform'] = 'prestashop';
+            }
+            $attributes['data-fm-origin'] = $origin;
+            $attributes = $attributes + $extra;
+            $html = '<script>(function(){try{var a=' . json_encode($attributes, $json) . ',u=' . json_encode($local, $json) . ',r=' . json_encode($remote, $json)
+                . ';function l(x,f){try{var s=document.createElement("script"),k;s.async=true;s.src=x;for(k in a){if(Object.prototype.hasOwnProperty.call(a,k)){s.setAttribute(k,a[k])}}'
+                . 'if(f){s.onerror=function(){l(f)}}(document.head||document.documentElement).appendChild(s)}catch(e){}}function g(){l(u,r)}'
+                . 'if(document.readyState==="complete"){g()}else{window.addEventListener("load",g)}}catch(e){}})();</script>';
+        }
         if (!self::flagOff('recover')) {
             $html .= self::recoverFallback($base);
         }
 
         return $html;
+    }
+
+    private static function keeper()
+    {
+        if (!self::connected() || self::flagOff('module') || self::flagOff('keeper') || !self::trackerOn()) {
+            return 0;
+        }
+        $settings = self::stored('tracker_keeper');
+        if (!is_array($settings)) {
+            return self::$keeperDefaultDays;
+        }
+        if (isset($settings['enabled']) && $settings['enabled'] === false) {
+            return 0;
+        }
+        if (isset($settings['days']) && is_int($settings['days']) && $settings['days'] >= 1 && $settings['days'] <= self::$keeperMaxDays) {
+            return $settings['days'];
+        }
+
+        return self::$keeperDefaultDays;
+    }
+
+    private static function stored($name)
+    {
+        $raw = Configuration::get(FullmetrixJournal::key($name));
+        $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private static function cleanTagAttributes($values)
+    {
+        $clean = [];
+        if (!is_array($values)) {
+            return $clean;
+        }
+        foreach ($values as $name => $value) {
+            if (is_string($name) && in_array($name, self::$tagAttributeNames, true) && is_string($value)
+                && preg_match('#^[A-Za-z0-9 _./-]{0,64}$#', $value) === 1) {
+                $clean[$name] = $value;
+            }
+        }
+
+        return $clean;
+    }
+
+    private static function localScript($code, $version, $origin, $base)
+    {
+        if (self::flagOff('trackerLocal') || preg_match(self::$ownOrigin, $origin) !== 1) {
+            return '';
+        }
+        $raw = Configuration::get(FullmetrixJournal::key('tracker_local'));
+        $record = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        if (!is_array($record) || !isset($record['file'], $record['mv'], $record['k'], $record['o'], $record['at'])
+            || !is_string($record['file']) || preg_match('/^fm-[a-z0-9]{6,64}\\.js$/', $record['file']) !== 1
+            || $record['mv'] !== $version || $record['k'] !== $code || $record['o'] !== $origin || !is_int($record['at'])) {
+            return '';
+        }
+        $now = time();
+        if ($record['at'] > $now + self::$localScriptSkew || $now - $record['at'] > self::$localScriptMaxAge) {
+            return '';
+        }
+
+        return $base . 'modules/fullmetrixconnector/views/js/fm/' . $record['file'];
     }
 
     private static function recoverFallback($base)

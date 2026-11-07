@@ -54,6 +54,10 @@ class FullmetrixJournal
         'digest_columns' => 'FULLMETRIX_DIGEST_COLUMNS',
         'command_nonces' => 'FULLMETRIX_COMMAND_NONCES',
         'hooks_repaired' => 'FULLMETRIX_HOOKS_REPAIRED',
+        'tracker_local' => 'FULLMETRIX_TRACKER_LOCAL',
+        'tracker_bundle' => 'FULLMETRIX_TRACKER_BUNDLE',
+        'tracker_keeper' => 'FULLMETRIX_TRACKER_KEEPER',
+        'tracker_tag' => 'FULLMETRIX_TRACKER_TAG',
     ];
 
     private static $states = [

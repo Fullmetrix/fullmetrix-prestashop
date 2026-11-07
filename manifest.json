@@ -1,6 +1,6 @@
 {
-  "version": "2.0.1",
+  "version": "2.1.0",
   "minimumRequired": "1.6.1.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Le module s'arrête proprement si une requête d'export échoue toujours, n'envoie plus les données privées de la boutique (notes internes, messages, IBAN, numéros d'identité, IP), lit le stock partagé des groupes de boutiques et transmet le code des coupons au lieu de leur nom, et n'accepte plus que la signature v2 des appels de Fullmetrix."
+  "changelog": "Le script de suivi peut être servi depuis le domaine de la boutique : le relais le télécharge et le vérifie en tâche de fond, la balise reprend l'adresse de Fullmetrix si le fichier local manque ou si l'interrupteur à distance est coupé."
 }

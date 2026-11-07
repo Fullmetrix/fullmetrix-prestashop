@@ -2,6 +2,15 @@
 
 All notable changes to the Fullmetrix PrestaShop connector are documented here.
 
+## 2.1.0
+
+- Le script de suivi peut être servi depuis le domaine de la boutique. Le relais (cron ou tirage), jamais une page vue par un client, demande le script à Fullmetrix toutes les 10 min, avec un délai de 3 s et une pause qui double après chaque échec (6 h au plus). Le script n'est gardé que si son empreinte SHA-256 et son origine sont justes. Il est écrit dans `views/js/fm/fm-<version>.js` par un fichier temporaire renommé, la version précédente est gardée, les plus anciennes ne sont supprimées qu'après 7 jours pour les pages servies par un cache.
+- La balise reste rendue sans accès disque ni réseau : elle lit l'adresse du fichier dans la configuration déjà chargée. Sans fichier vérifié depuis moins de 48 h, ou si le fichier local ne se charge pas dans le navigateur, elle reprend l'adresse `https://fullmetrix.com/t.js`, inchangée.
+- Le drapeau à distance `trackerLocal` remet l'adresse distante sans mise à jour du module. Un dossier non inscriptible laisse l'adresse distante, sans erreur.
+- La désinstallation supprime les fichiers du script et leur configuration.
+- Nouveau point `keep` (contrôleur `controllers/front/keep.php`) qui repose le cookie `fm_vid` depuis le serveur de la boutique pour qu'il tienne sur Safari. Il ne répond qu'à un POST du même site, lit la valeur dans le cookie reçu (UUID v4, égale au corps, un seul `fm_vid`), répond 204 sans gabarit, sans panier et sans cookie de session, et n'écrit que `fm_vid` avec `Path=/`. Sa durée (1 à 390 jours, 390 par défaut) et son interrupteur viennent du paquet lu par le relais ; coupé, il répond 404 sans cookie.
+- La balise porte `data-fm-keeper` (chemin du point, sans hôte) quand le point est actif, et recopie les attributs de balise fournis par Fullmetrix pour les outils de consentement (liste fermée : `type`, `data-cookieconsent`, `data-category`, `data-cookiescript`, `data-cmp-ab`). Le relais lit le paquet même quand le fichier local est coupé.
+
 ## 2.0.1
 
 - L'export s'arrête après trois échecs consécutifs de sa requête principale, avec une ligne `fatal`, au lieu de relancer la même requête sans fin.

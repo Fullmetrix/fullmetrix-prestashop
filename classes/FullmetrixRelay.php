@@ -15,6 +15,7 @@ require_once dirname(__FILE__) . '/FullmetrixJournalStore.php';
 require_once dirname(__FILE__) . '/FullmetrixChanges.php';
 require_once dirname(__FILE__) . '/FullmetrixHealth.php';
 require_once dirname(__FILE__) . '/FullmetrixInstallation.php';
+require_once dirname(__FILE__) . '/FullmetrixTrackerBundle.php';
 
 class FullmetrixRelay
 {
@@ -147,6 +148,7 @@ class FullmetrixRelay
         } catch (Throwable $e) {
             $status = 'error';
         }
+        FullmetrixTrackerBundle::refreshQuietly();
         self::releaseLock();
 
         return $status;
