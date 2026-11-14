@@ -292,7 +292,9 @@ class FullmetrixConnectorRecoverModuleFrontController extends ModuleFrontControl
         ]);
         $response = @curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) {
+            curl_close($ch);
+        }
 
         if ($httpCode === 0 || $httpCode >= 500) {
             self::recordFailure();

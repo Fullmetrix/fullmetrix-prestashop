@@ -2,6 +2,16 @@
 
 All notable changes to the Fullmetrix PrestaShop connector are documented here.
 
+## 2.2.0
+
+- Balise de mesure neutre. Le chargeur écrit une balise sans nom de service : clé opaque `data-kvo` (reçue du paquet, validée `^[A-Z2-7]{20}$`, sinon le code de connexion), `data-kvo-p="ps"`, `data-kvo-v` (version du module), `data-kvo-b` (base de la boutique), `data-kvo-s="0"` quand les signaux de session sont coupés, `data-kvo-k` (chemin du point cookie, inchangé) et, seulement si l'origine des envois n'est pas `fullmetrix.com`, `data-kvo-o`. Les attributs d'exclusion des extensions de cache (`data-no-optimize`, `data-no-defer`, `data-no-minify`, `data-cfasync`, `nowprocket`, `data-noptimize`, `data-ao-skip`, `data-pagespeed-no-defer`, `data-wpfc-render`) sont posés en dur ; plus aucun attribut ne vient du paquet (`tagAttributes` est ignoré).
+- Le repli est construit par le module : `https://fullmetrix.com/assets/js/s.js?k=<clé>`, toujours sur `fullmetrix.com`. Le fichier local reste dans `views/js/fm/fm-<version>.js`.
+- Deux origines distinctes. L'origine de l'API (paquet, relais, synchro) est celle du réglage administrateur `FULLMETRIX_API_BASE`, sinon `https://fullmetrix.com` ; la clé libre `FULLMETRIX_TRACKER_ORIGIN` n'est plus lue. L'origine des envois vient du paquet et n'est acceptée que si c'est exactement `https://fullmetrix.com` ou `https://<label>.<domaine de la boutique>` (`PS_SHOP_DOMAIN_SSL`, sinon `PS_SHOP_DOMAIN`, sans `www.`), sinon `fullmetrix.com`.
+- Point cookie `keep` : lit `_kvo_v` puis `fm_vid` (un seul exemplaire de chaque nom), repose `_kvo_v` et, si `fm_vid` était présent avec la même valeur, `fm_vid` aussi : deux lignes `Set-Cookie` possibles. Répond `X-Kvo-K: 1` et `X-Fm-Keeper: 1`. Le chemin du point et celui de `session` ne changent pas.
+- `curl_close()` n'est appelé qu'avant PHP 8.0.
+- Service tiers et cookies : la boutique charge le script de mesure de Fullmetrix (`https://fullmetrix.com`, politique de confidentialité `https://fullmetrix.com/privacy`). Cookies posés sur le domaine de la boutique : `_kvo_v` (visiteur, 390 jours au plus), `_kvo_s` (session, 30 min), `_kvo_c` (contact après connexion ou commande) ; les anciens `fm_*` des visiteurs déjà connus restent jusqu'à leur expiration. Le consentement de suivi n'est pas géré par le module : la commande publique `fm('consent', {...})` est appelée par le gestionnaire de balises du marchand.
+- Aucun hook désinscrit, anciennes clés de configuration gardées jusqu'à la désinstallation.
+
 ## 2.1.0
 
 - Le script de suivi peut être servi depuis le domaine de la boutique. Le relais (cron ou tirage), jamais une page vue par un client, demande le script à Fullmetrix toutes les 10 min, avec un délai de 3 s et une pause qui double après chaque échec (6 h au plus). Le script n'est gardé que si son empreinte SHA-256 et son origine sont justes. Il est écrit dans `views/js/fm/fm-<version>.js` par un fichier temporaire renommé, la version précédente est gardée, les plus anciennes ne sont supprimées qu'après 7 jours pour les pages servies par un cache.

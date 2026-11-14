@@ -58,6 +58,7 @@ class FullmetrixJournal
         'tracker_bundle' => 'FULLMETRIX_TRACKER_BUNDLE',
         'tracker_keeper' => 'FULLMETRIX_TRACKER_KEEPER',
         'tracker_tag' => 'FULLMETRIX_TRACKER_TAG',
+        'tracker_send' => 'FULLMETRIX_TRACKER_SEND',
     ];
 
     private static $states = [

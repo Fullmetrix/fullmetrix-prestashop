@@ -16,7 +16,8 @@ class FullmetrixKeeper
 {
     private static $defaultDays = 390;
     private static $maxDays = 390;
-    private static $cookieName = 'fm_vid';
+    private static $cookieName = '_kvo_v';
+    private static $legacyCookieName = 'fm_vid';
     private static $maxBodyBytes = 64;
     private static $uuidV4 = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/';
 
@@ -61,26 +62,33 @@ class FullmetrixKeeper
     {
         $days = (int) $days;
         if ($days < 1) {
-            return ['status' => 404, 'value' => null];
+            return ['status' => 404, 'value' => null, 'legacy' => false];
         }
         if (strtoupper((string) $method) !== 'POST') {
-            return ['status' => 405, 'value' => null];
+            return ['status' => 405, 'value' => null, 'legacy' => false];
         }
         if ($fetchSite !== null && $fetchSite !== 'same-origin') {
-            return ['status' => 403, 'value' => null];
+            return ['status' => 403, 'value' => null, 'legacy' => false];
         }
-        if (self::occurrences($cookieHeader) !== 1 || !is_array($cookies) || !isset($cookies[self::$cookieName])) {
-            return ['status' => 400, 'value' => null];
+        $fresh = self::occurrences($cookieHeader, self::$cookieName);
+        $legacy = self::occurrences($cookieHeader, self::$legacyCookieName);
+        if ($fresh > 1 || $legacy > 1 || ($fresh === 0 && $legacy === 0) || !is_array($cookies)) {
+            return ['status' => 400, 'value' => null, 'legacy' => false];
         }
-        $value = $cookies[self::$cookieName];
+        $name = $fresh === 1 ? self::$cookieName : self::$legacyCookieName;
+        if (!isset($cookies[$name])) {
+            return ['status' => 400, 'value' => null, 'legacy' => false];
+        }
+        $value = $cookies[$name];
         if (!is_string($value) || preg_match(self::$uuidV4, $value) !== 1) {
-            return ['status' => 400, 'value' => null];
+            return ['status' => 400, 'value' => null, 'legacy' => false];
         }
         if (!is_string($body) || !hash_equals($value, $body)) {
-            return ['status' => 400, 'value' => null];
+            return ['status' => 400, 'value' => null, 'legacy' => false];
         }
+        $legacyValue = $legacy === 1 && isset($cookies[self::$legacyCookieName]) ? $cookies[self::$legacyCookieName] : null;
 
-        return ['status' => 204, 'value' => $value];
+        return ['status' => 204, 'value' => $value, 'legacy' => is_string($legacyValue) && $legacyValue === $value];
     }
 
     public static function headers($decision, $days, $secure)
@@ -95,8 +103,12 @@ class FullmetrixKeeper
             return $headers;
         }
         $headers[] = 'X-Fm-Keeper: 1';
-        $headers[] = 'Set-Cookie: ' . self::$cookieName . '=' . $decision['value'] . '; Max-Age=' . ((int) $days * 86400)
-            . '; Path=/; SameSite=Lax' . ($secure ? '; Secure' : '');
+        $headers[] = 'X-Kvo-K: 1';
+        $suffix = '=' . $decision['value'] . '; Max-Age=' . ((int) $days * 86400) . '; Path=/; SameSite=Lax' . ($secure ? '; Secure' : '');
+        $headers[] = 'Set-Cookie: ' . self::$cookieName . $suffix;
+        if (!empty($decision['legacy'])) {
+            $headers[] = 'Set-Cookie: ' . self::$legacyCookieName . $suffix;
+        }
 
         return $headers;
     }
@@ -116,7 +128,7 @@ class FullmetrixKeeper
         return is_array($decoded) ? $decoded : null;
     }
 
-    private static function occurrences($cookieHeader)
+    private static function occurrences($cookieHeader, $cookieName)
     {
         if (!is_string($cookieHeader) || $cookieHeader === '') {
             return 0;
@@ -125,7 +137,7 @@ class FullmetrixKeeper
         foreach (explode(';', $cookieHeader) as $pair) {
             $position = strpos($pair, '=');
             $name = trim($position === false ? $pair : substr($pair, 0, $position));
-            if ($name === self::$cookieName) {
+            if ($name === $cookieName) {
                 ++$count;
             }
         }

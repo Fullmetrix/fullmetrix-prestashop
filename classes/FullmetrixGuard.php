@@ -16,12 +16,25 @@ class FullmetrixGuard
     private static $windowSeconds = 60;
     private static $sleepAfter = 21600;
     private static $defaultOrigin = 'https://fullmetrix.com';
-    private static $ownOrigin = '#^https://([a-z0-9-]+\\.)?fullmetrix\\.com$#';
+    private static $fallbackPath = '/assets/js/s.js?k=';
+    private static $tagKeyPattern = '#^[A-Z2-7]{20}$#';
+    private static $sendOriginPattern = '#^https://([a-z0-9-]{1,20})\\.([a-z0-9.-]+)$#';
+    private static $declaredDomainPattern = '#^(?:www\\.)?([a-z0-9][a-z0-9-]*(?:\\.[a-z0-9][a-z0-9-]*)+)$#';
+    private static $exclusionAttributes = [
+        'data-no-optimize' => '1',
+        'data-no-defer' => '1',
+        'data-no-minify' => '1',
+        'data-cfasync' => 'false',
+        'nowprocket' => '1',
+        'data-noptimize' => '1',
+        'data-ao-skip' => '1',
+        'data-pagespeed-no-defer' => '1',
+        'data-wpfc-render' => 'false',
+    ];
     private static $localScriptMaxAge = 172800;
     private static $localScriptSkew = 300;
     private static $keeperDefaultDays = 390;
     private static $keeperMaxDays = 390;
-    private static $tagAttributeNames = ['type', 'data-cookieconsent', 'data-category', 'data-cookiescript', 'data-cmp-ab'];
     private static $benignErrors = [1205, 1213];
     private static $windowStart = 0;
     private static $bootAt = 0;
@@ -105,7 +118,7 @@ class FullmetrixGuard
         return self::connected();
     }
 
-    public static function trackerOrigin()
+    public static function apiOrigin()
     {
         if (PHP_VERSION_ID < 70100) {
             return '';
@@ -114,13 +127,60 @@ class FullmetrixGuard
         return self::origin();
     }
 
-    public static function isOwnOrigin($origin)
+    public static function sendOrigin()
     {
         if (PHP_VERSION_ID < 70100) {
-            return false;
+            return '';
+        }
+        $send = self::stored('tracker_send');
+
+        return self::acceptedSendOrigin(is_array($send) && isset($send['o']) ? $send['o'] : null, self::declaredDomain());
+    }
+
+    public static function acceptedSendOrigin($candidate, $domain)
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return '';
+        }
+        if (!is_string($candidate) || $candidate === self::$defaultOrigin) {
+            return self::$defaultOrigin;
+        }
+        if (!is_string($domain) || $domain === '' || preg_match(self::$sendOriginPattern, $candidate, $match) !== 1 || $match[2] !== $domain) {
+            return self::$defaultOrigin;
         }
 
-        return is_string($origin) && preg_match(self::$ownOrigin, $origin) === 1;
+        return $candidate;
+    }
+
+    public static function declaredDomain()
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return '';
+        }
+        $raw = Configuration::get('PS_SHOP_DOMAIN_SSL');
+        if (!is_string($raw) || $raw === '') {
+            $raw = Configuration::get('PS_SHOP_DOMAIN');
+        }
+        if (!is_string($raw) || preg_match(self::$declaredDomainPattern, $raw, $match) !== 1) {
+            return '';
+        }
+
+        return $match[1];
+    }
+
+    public static function normalizeSend($bundle)
+    {
+        if (PHP_VERSION_ID < 70100) {
+            return null;
+        }
+        if (!is_array($bundle)) {
+            return null;
+        }
+        $key = isset($bundle['tagKey']) && is_string($bundle['tagKey']) && preg_match(self::$tagKeyPattern, $bundle['tagKey']) === 1 ? $bundle['tagKey'] : '';
+        $origin = isset($bundle['origin']) && is_string($bundle['origin']) && preg_match('#^https://[a-z0-9.-]{1,253}$#', $bundle['origin']) === 1
+            ? $bundle['origin'] : self::$defaultOrigin;
+
+        return ['k' => $key, 'o' => $origin];
     }
 
     public static function keeperDays()
@@ -161,15 +221,6 @@ class FullmetrixGuard
         }
 
         return ['enabled' => $keeper['enabled'], 'days' => $days];
-    }
-
-    public static function normalizeTagAttributes($values)
-    {
-        if (PHP_VERSION_ID < 70100) {
-            return [];
-        }
-
-        return self::cleanTagAttributes($values);
     }
 
     public static function trip($hook, $code)
@@ -535,29 +586,28 @@ class FullmetrixGuard
         }
         $version = FullmetrixConnector::pluginVersion();
         $base = self::base();
-        $attributes = ['data-key' => $code, 'data-fm-v' => $version, 'data-fm-base' => $base];
+        $send = self::stored('tracker_send');
+        $key = is_array($send) && isset($send['k']) && is_string($send['k']) && preg_match(self::$tagKeyPattern, $send['k']) === 1 ? $send['k'] : $code;
+        $attributes = ['data-kvo' => $key, 'data-kvo-p' => 'ps', 'data-kvo-v' => $version, 'data-kvo-b' => $base];
         if (self::flagOff('sessionSignals')) {
-            $attributes['data-fm-signals'] = '0';
+            $attributes['data-kvo-s'] = '0';
         }
-        $json = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
-        $origin = self::origin();
-        $remote = $origin . '/t.js?v=' . $version;
-        $local = self::localScript($code, $version, $origin, $base);
-        $extra = self::cleanTagAttributes(self::stored('tracker_tag'));
         if (self::keeper() > 0) {
-            $extra = ['data-fm-keeper' => self::keeperPath()] + $extra;
+            $attributes['data-kvo-k'] = self::keeperPath();
         }
+        $origin = self::sendOrigin();
+        if ($origin !== self::$defaultOrigin) {
+            $attributes['data-kvo-o'] = $origin;
+        }
+        $attributes = $attributes + self::$exclusionAttributes;
+        $json = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+        $remote = self::$defaultOrigin . self::$fallbackPath . rawurlencode($key);
+        $local = self::localScript($code, $version, self::origin(), $base);
         if ($local === '') {
-            $attributes = $attributes + $extra;
             $html = '<script>(function(){try{var a=' . json_encode($attributes, $json) . ',u=' . json_encode($remote, $json)
                 . ';function l(){try{var s=document.createElement("script"),k;s.async=true;s.src=u;for(k in a){if(Object.prototype.hasOwnProperty.call(a,k)){s.setAttribute(k,a[k])}}'
                 . '(document.head||document.documentElement).appendChild(s)}catch(e){}}if(document.readyState==="complete"){l()}else{window.addEventListener("load",l)}}catch(e){}})();</script>';
         } else {
-            if (!preg_match('/^1\\.6\\./', (string) _PS_VERSION_)) {
-                $attributes['data-platform'] = 'prestashop';
-            }
-            $attributes['data-fm-origin'] = $origin;
-            $attributes = $attributes + $extra;
             $html = '<script>(function(){try{var a=' . json_encode($attributes, $json) . ',u=' . json_encode($local, $json) . ',r=' . json_encode($remote, $json)
                 . ';function l(x,f){try{var s=document.createElement("script"),k;s.async=true;s.src=x;for(k in a){if(Object.prototype.hasOwnProperty.call(a,k)){s.setAttribute(k,a[k])}}'
                 . 'if(f){s.onerror=function(){l(f)}}(document.head||document.documentElement).appendChild(s)}catch(e){}}function g(){l(u,r)}'
@@ -597,25 +647,9 @@ class FullmetrixGuard
         return is_array($decoded) ? $decoded : null;
     }
 
-    private static function cleanTagAttributes($values)
-    {
-        $clean = [];
-        if (!is_array($values)) {
-            return $clean;
-        }
-        foreach ($values as $name => $value) {
-            if (is_string($name) && in_array($name, self::$tagAttributeNames, true) && is_string($value)
-                && preg_match('#^[A-Za-z0-9 _./-]{0,64}$#', $value) === 1) {
-                $clean[$name] = $value;
-            }
-        }
-
-        return $clean;
-    }
-
     private static function localScript($code, $version, $origin, $base)
     {
-        if (self::flagOff('trackerLocal') || preg_match(self::$ownOrigin, $origin) !== 1) {
+        if (self::flagOff('trackerLocal')) {
             return '';
         }
         $raw = Configuration::get(FullmetrixJournal::key('tracker_local'));
@@ -672,10 +706,6 @@ class FullmetrixGuard
 
     private static function origin()
     {
-        $configured = Configuration::get(FullmetrixJournal::key('tracker_origin'));
-        if (is_string($configured) && preg_match('#^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$#', $configured)) {
-            return $configured;
-        }
         $apiBase = Configuration::get(FullmetrixJournal::key('api_base'));
         if (is_string($apiBase) && preg_match('#^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?)(/|$)#', $apiBase, $matches)) {
             return $matches[1];

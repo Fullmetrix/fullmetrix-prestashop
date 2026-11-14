@@ -24,6 +24,7 @@ class FullmetrixTrackerBundle
     private static $maxResponseBytes = 2097152;
     private static $maxScriptBytes = 1048576;
     private static $scriptRetention = 604800;
+    private static $contract = 2;
 
     public static function directory()
     {
@@ -56,12 +57,7 @@ class FullmetrixTrackerBundle
         if (!FullmetrixChanges::flagEnabled('module') || !FullmetrixChanges::flagEnabled('tracker')) {
             return 'off';
         }
-        $origin = FullmetrixGuard::trackerOrigin();
-        if (!FullmetrixGuard::isOwnOrigin($origin)) {
-            self::forget();
-
-            return 'origin';
-        }
+        $origin = FullmetrixGuard::apiOrigin();
         $state = self::state();
         $record = self::record();
         $upgraded = is_array($record) && (!isset($record['mv']) || $record['mv'] !== FullmetrixConnector::pluginVersion());
@@ -72,7 +68,7 @@ class FullmetrixTrackerBundle
         $local = FullmetrixChanges::flagEnabled('trackerLocal');
         $writable = is_dir($directory) && is_writable($directory);
         $code = (string) Configuration::get(FullmetrixJournal::key('code'));
-        $response = static::request($origin . '/api/tracker/bundle?key=' . rawurlencode($code));
+        $response = static::request($origin . '/api/tracker/bundle?key=' . rawurlencode($code) . '&contract=' . self::$contract);
         $status = self::install($response, $origin, $code, $record, $now, $local, $writable);
         if ($status === 'ok' || $status === 'local_off') {
             self::saveState($now + self::$interval, 0, '');
@@ -151,6 +147,7 @@ class FullmetrixTrackerBundle
         Configuration::deleteByName(FullmetrixJournal::key('tracker_local'));
         Configuration::deleteByName(FullmetrixJournal::key('tracker_bundle'));
         Configuration::deleteByName(FullmetrixJournal::key('tracker_keeper'));
+        Configuration::deleteByName(FullmetrixJournal::key('tracker_send'));
         Configuration::deleteByName(FullmetrixJournal::key('tracker_tag'));
     }
 
@@ -167,27 +164,26 @@ class FullmetrixTrackerBundle
             return 'http_' . $status;
         }
         $bundle = is_string($response['body']) ? json_decode($response['body'], true) : null;
-        if (is_array($bundle) && isset($bundle['origin']) && $bundle['origin'] === $origin && FullmetrixGuard::isOwnOrigin($origin)) {
-            self::saveSettings($bundle);
-            if (!$local) {
-                return 'local_off';
-            }
-            if (!$writable) {
-                return 'not_writable';
-            }
-        }
-        if (!is_array($bundle) || !isset($bundle['version'], $bundle['sha256'], $bundle['content'], $bundle['origin'])
-            || !is_string($bundle['version']) || !preg_match('/^[a-z0-9]{6,64}$/', $bundle['version'])
+        if (!is_array($bundle) || !isset($bundle['version'], $bundle['sha256'], $bundle['content'])
+            || !is_string($bundle['version']) || !preg_match('/^[0-9a-f]{12}$/', $bundle['version'])
             || !is_string($bundle['sha256']) || !preg_match('/^[a-f0-9]{64}$/', $bundle['sha256'])
-            || !is_string($bundle['content']) || $bundle['content'] === '' || strlen($bundle['content']) > self::$maxScriptBytes
-            || !is_string($bundle['origin'])) {
+            || !is_string($bundle['content']) || $bundle['content'] === '' || strlen($bundle['content']) > self::$maxScriptBytes) {
             return 'invalid_bundle';
-        }
-        if ($bundle['origin'] !== $origin || !FullmetrixGuard::isOwnOrigin($bundle['origin'])) {
-            return 'foreign_origin';
         }
         if (!hash_equals($bundle['sha256'], hash('sha256', $bundle['content']))) {
             return 'sha256_mismatch';
+        }
+        self::saveSettings($bundle);
+        if (!$local) {
+            return 'local_off';
+        }
+        if (isset($bundle['local']) && $bundle['local'] === false) {
+            self::forget();
+
+            return 'local_off';
+        }
+        if (!$writable) {
+            return 'not_writable';
         }
         $directory = self::directory();
         $file = 'fm-' . $bundle['version'] . '.js';
@@ -222,11 +218,9 @@ class FullmetrixTrackerBundle
                 FullmetrixJournalStore::setConfig(FullmetrixJournal::key('tracker_keeper'), json_encode($keeper));
             }
         }
-        if (array_key_exists('tagAttributes', $bundle)) {
-            FullmetrixJournalStore::setConfig(
-                FullmetrixJournal::key('tracker_tag'),
-                json_encode((object) FullmetrixGuard::normalizeTagAttributes($bundle['tagAttributes']))
-            );
+        $send = FullmetrixGuard::normalizeSend($bundle);
+        if ($send !== null) {
+            FullmetrixJournalStore::setConfig(FullmetrixJournal::key('tracker_send'), json_encode($send));
         }
     }
 
@@ -282,7 +276,7 @@ class FullmetrixTrackerBundle
 
     private static function isScriptName($name)
     {
-        return is_string($name) && preg_match('/^fm-[a-z0-9]{6,64}\.js$/', $name) === 1;
+        return is_string($name) && preg_match('/^fm-[0-9a-f]{12}\.js$/', $name) === 1;
     }
 
     private static function isTemporaryName($name)

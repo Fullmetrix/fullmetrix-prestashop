@@ -20,7 +20,7 @@ class FullmetrixConnectorKeepModuleFrontController extends ModuleFrontController
     public function run()
     {
         @ini_set('display_errors', '0');
-        $decision = ['status' => 404, 'value' => null];
+        $decision = ['status' => 404, 'value' => null, 'legacy' => false];
         $days = 0;
         $secure = false;
         try {
@@ -39,9 +39,9 @@ class FullmetrixConnectorKeepModuleFrontController extends ModuleFrontController
             );
             $secure = (bool) Tools::usingSecureMode();
         } catch (Exception $e) {
-            $decision = ['status' => 404, 'value' => null];
+            $decision = ['status' => 404, 'value' => null, 'legacy' => false];
         } catch (Throwable $e) {
-            $decision = ['status' => 404, 'value' => null];
+            $decision = ['status' => 404, 'value' => null, 'legacy' => false];
         }
         $this->respond($decision, $days, $secure);
     }
@@ -76,7 +76,7 @@ class FullmetrixConnectorKeepModuleFrontController extends ModuleFrontController
                 ? FullmetrixKeeper::headers($decision, $days, $secure)
                 : ['Cache-Control: no-store, private', 'Content-Length: 0'];
             foreach ($lines as $line) {
-                header($line, true);
+                header($line, strpos($line, 'Set-Cookie: ') !== 0);
             }
         }
         exit;

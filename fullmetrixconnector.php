@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
 
 class FullmetrixConnector extends Module
 {
-    private static $pluginVersion = '2.1.0';
+    private static $pluginVersion = '2.2.0';
     private static $pluginChannel = 'community';
     private static $apiBase = 'https://fullmetrix.com/api/plugin';
     private static $guardFailed = false;
@@ -21,7 +21,7 @@ class FullmetrixConnector extends Module
     {
         $this->name = 'fullmetrixconnector';
         $this->tab = 'analytics_stats';
-        $this->version = '2.1.0';
+        $this->version = '2.2.0';
         $this->author = 'Fullmetrix';
         $this->module_key = '9cc46e05bb451f6ed601277b8096d019';
         $this->need_instance = 0;
@@ -796,7 +796,9 @@ class FullmetrixConnector extends Module
 
         $response = curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80000) {
+            curl_close($ch);
+        }
 
         if ($response === false) {
             return false;

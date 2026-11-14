@@ -1,6 +1,6 @@
 {
-  "version": "2.1.0",
+  "version": "2.2.0",
   "minimumRequired": "1.6.1.0",
   "maximumRequired": "9.99.99",
-  "changelog": "Le script de suivi peut être servi depuis le domaine de la boutique : le relais le télécharge et le vérifie en tâche de fond, la balise reprend l'adresse de Fullmetrix si le fichier local manque ou si l'interrupteur à distance est coupé."
+  "changelog": "Balise de mesure neutre : clé opaque et attributs data-kvo, plus aucun nom de service dans la page, attributs d'exclusion des extensions de cache posés en dur, repli vers https://fullmetrix.com/assets/js/s.js. L'origine des envois n'est acceptée que si c'est fullmetrix.com ou un sous-domaine du domaine de la boutique ; l'adresse de l'API vient du réglage administrateur ou de fullmetrix.com. Le point cookie keep lit _kvo_v puis fm_vid et repose les deux noms quand les deux sont présents, avec les en-têtes X-Kvo-K et X-Fm-Keeper. Aucun hook désinscrit."
 }
